@@ -1,105 +1,105 @@
 #!/bin/bash
 set -e
 
-echo "=== Waiting for config servers ==="
-until mongosh --host cfg1 --port 27019 --quiet --eval "db.adminCommand({ ping: 1 }).ok" >/dev/null 2>&1; do sleep 2; done
-until mongosh --host cfg2 --port 27019 --quiet --eval "db.adminCommand({ ping: 1 }).ok" >/dev/null 2>&1; do sleep 2; done
-until mongosh --host cfg3 --port 27019 --quiet --eval "db.adminCommand({ ping: 1 }).ok" >/dev/null 2>&1; do sleep 2; done
-
-echo "=== Waiting for shard servers ==="
-for host in s1a s1b s1c s2a s2b s2c s3a s3b s3c; do
-  until mongosh --host "$host" --port 27018 --quiet --eval "db.adminCommand({ ping: 1 }).ok" >/dev/null 2>&1; do
+wait_ping() {
+  local host="$1"
+  local port="$2"
+  echo "Waiting for $host:$port ..."
+  until mongosh --host "$host" --port "$port" --quiet --eval 'db.adminCommand({ ping: 1 }).ok' | grep -q 1; do
     sleep 2
   done
-done
-
-echo "=== Initiating config replica set ==="
-mongosh --host cfg1 --port 27019 --quiet <<'EOF'
-try {
-  rs.status();
-  print("cfgRS already initialized.");
-} catch (e) {
-  rs.initiate({
-    _id: "cfgRS",
-    configsvr: true,
-    members: [
-      { _id: 0, host: "cfg1:27019" },
-      { _id: 1, host: "cfg2:27019" },
-      { _id: 2, host: "cfg3:27019" }
-    ]
-  });
-  print("cfgRS initiated.");
 }
-EOF
 
-echo "=== Waiting for cfgRS election ==="
-sleep 15
-
-echo "=== Initiating shard1 replica set ==="
-mongosh --host s1a --port 27018 --quiet <<'EOF'
-try {
-  rs.status();
-  print("shard1RS already initialized.");
-} catch (e) {
-  rs.initiate({
-    _id: "shard1RS",
-    members: [
-      { _id: 0, host: "s1a:27018" },
-      { _id: 1, host: "s1b:27018" },
-      { _id: 2, host: "s1c:27018" }
-    ]
-  });
-  print("shard1RS initiated.");
+rs_exists() {
+  local host="$1"
+  local port="$2"
+  mongosh --host "$host" --port "$port" --quiet --eval 'try { rs.status().ok } catch(e) { print(0) }' 2>/dev/null | tail -n 1 | grep -q 1
 }
-EOF
 
-echo "=== Initiating shard2 replica set ==="
-mongosh --host s2a --port 27018 --quiet <<'EOF'
-try {
-  rs.status();
-  print("shard2RS already initialized.");
-} catch (e) {
-  rs.initiate({
-    _id: "shard2RS",
-    members: [
-      { _id: 0, host: "s2a:27018" },
-      { _id: 1, host: "s2b:27018" },
-      { _id: 2, host: "s2c:27018" }
-    ]
-  });
-  print("shard2RS initiated.");
+wait_rs_primary() {
+  local host="$1"
+  local port="$2"
+  local name="$3"
+  echo "Waiting for PRIMARY in $name ..."
+  until mongosh --host "$host" --port "$port" --quiet --eval 'try { rs.status().members.some(m => m.stateStr === "PRIMARY") } catch(e) { false }' | grep -q true; do
+    sleep 2
+  done
 }
-EOF
 
-echo "=== Initiating shard3 replica set ==="
-mongosh --host s3a --port 27018 --quiet <<'EOF'
-try {
-  rs.status();
-  print("shard3RS already initialized.");
-} catch (e) {
-  rs.initiate({
-    _id: "shard3RS",
-    members: [
-      { _id: 0, host: "s3a:27018" },
-      { _id: 1, host: "s3b:27018" },
-      { _id: 2, host: "s3c:27018" }
-    ]
-  });
-  print("shard3RS initiated.");
+ensure_cfg_rs() {
+  echo "Checking cfgRS ..."
+  if rs_exists cfg1 27019; then
+    echo "cfgRS already initialized."
+  else
+    echo "Initializing cfgRS ..."
+    mongosh --host cfg1 --port 27019 --quiet <<'EOF'
+rs.initiate({
+  _id: "cfgRS",
+  configsvr: true,
+  members: [
+    { _id: 0, host: "cfg1:27019" },
+    { _id: 1, host: "cfg2:27019" },
+    { _id: 2, host: "cfg3:27019" }
+  ]
+})
+EOF
+  fi
 }
-EOF
 
-echo "=== Waiting for shard primaries ==="
-sleep 20
+ensure_shard_rs() {
+  local host="$1"
+  local rsname="$2"
+  shift 2
+  local members=("$@")
 
-echo "=== Waiting for mongos ==="
-until mongosh --host mongos --port 27017 --quiet --eval "db.adminCommand({ ping: 1 }).ok" >/dev/null 2>&1; do
-  sleep 2
-done
+  echo "Checking $rsname ..."
+  if rs_exists "$host" 27018; then
+    echo "$rsname already initialized."
+    return
+  fi
 
-echo "=== Adding shards to mongos ==="
-mongosh --host mongos --port 27017 --quiet <<'EOF'
-const existing = db.getSiblingDB("config").shards.find().toArray().map(s => s._id);
+  echo "Initializing $rsname ..."
+  local js="rs.initiate({ _id: '$rsname', members: ["
+  local i=0
+  for member in "${members[@]}"; do
+    if [ $i -gt 0 ]; then
+      js+=", "
+    fi
+    js+="{ _id: $i, host: '$member' }"
+    i=$((i+1))
+  done
+  js+="] })"
+
+  mongosh --host "$host" --port 27018 --quiet --eval "$js"
+}
+
+wait_mongos_ready() {
+  echo "Waiting for mongos ..."
+  until mongosh --host mongos --port 27017 --quiet --eval 'db.adminCommand({ ping: 1 }).ok' | grep -q 1; do
+    sleep 2
+  done
+}
+
+wait_mongos_metadata_ready() {
+  echo "Waiting for mongos metadata readiness ..."
+  until mongosh --host mongos --port 27017 --quiet --eval '
+    try {
+      db.adminCommand({ ping: 1 });
+      const cfg = db.getSiblingDB("config");
+      cfg.shards.find().toArray();
+      print(true);
+    } catch(e) {
+      print(false);
+    }' | grep -q true; do
+    sleep 3
+  done
+}
+
+ensure_shards_added() {
+  echo "Ensuring shards are added to mongos ..."
+  mongosh --host mongos --port 27017 --quiet <<'EOF'
+const cfg = db.getSiblingDB("config");
+const existing = cfg.shards.find().toArray().map(s => s._id);
 
 if (!existing.includes("shard1RS")) {
   sh.addShard("shard1RS/s1a:27018,s1b:27018,s1c:27018");
@@ -122,9 +122,66 @@ if (!existing.includes("shard3RS")) {
   print("shard3RS already exists");
 }
 EOF
+}
+
+wait_non_draining_shards() {
+  echo "Waiting for non-draining shards ..."
+  until mongosh --host mongos --port 27017 --quiet --eval '
+    try {
+      const cfg = db.getSiblingDB("config");
+      const total = cfg.shards.countDocuments({});
+      const draining = cfg.shards.countDocuments({ draining: true });
+      print(total >= 3 && draining === 0);
+    } catch(e) {
+      print(false);
+    }' | grep -q true; do
+    sleep 3
+  done
+}
+
+echo "=== Waiting for config servers ==="
+wait_ping cfg1 27019
+wait_ping cfg2 27019
+wait_ping cfg3 27019
+
+echo "=== Ensuring config replica set ==="
+ensure_cfg_rs
+wait_rs_primary cfg1 27019 cfgRS
+
+echo "=== Waiting for shard servers ==="
+wait_ping s1a 27018
+wait_ping s1b 27018
+wait_ping s1c 27018
+wait_ping s2a 27018
+wait_ping s2b 27018
+wait_ping s2c 27018
+wait_ping s3a 27018
+wait_ping s3b 27018
+wait_ping s3c 27018
+
+echo "=== Ensuring shard replica sets ==="
+ensure_shard_rs s1a shard1RS s1a:27018 s1b:27018 s1c:27018
+ensure_shard_rs s2a shard2RS s2a:27018 s2b:27018 s2c:27018
+ensure_shard_rs s3a shard3RS s3a:27018 s3b:27018 s3c:27018
+
+wait_rs_primary s1a 27018 shard1RS
+wait_rs_primary
+s2a 27018 shard2RS
+wait_rs_primary s3a 27018 shard3RS
+
+echo "=== Waiting for mongos ==="
+wait_mongos_ready
+wait_mongos_metadata_ready
+
+echo "=== Ensuring shards are registered ==="
+ensure_shards_added
+wait_non_draining_shards
 
 echo "=== Initializing games database, schema, sharding and indexes ==="
 mongosh --host mongos --port 27017 /mongo-init/01-init-db.js
+
+echo "=== Splitting and distributing chunks ==="
+mongosh --host mongos --port 27017 /mongo-init/02-post-sharding.js
 
 echo "=== Importing unified dataset if collection is empty ==="
 DOC_COUNT=$(mongosh --host mongos --port 27017 --quiet --eval 'db.getSiblingDB("gamesdb").games_unified_validated.countDocuments()' | tail -n 1 | tr -d '\r')
@@ -132,7 +189,6 @@ echo "DOC_COUNT=$DOC_COUNT"
 
 if [ "$DOC_COUNT" = "0" ]; then
   echo "Collection is empty, starting mongoimport..."
-
   mongoimport \
     --host mongos \
     --port 27017 \
@@ -146,9 +202,6 @@ if [ "$DOC_COUNT" = "0" ]; then
 else
   echo "Collection already contains data ($DOC_COUNT documents), skipping import"
 fi
-
-echo "=== Splitting and distributing chunks ==="
-mongosh --host mongos --port 27017 /mongo-init/02-post-sharding.js
 
 echo "=== Final status ==="
 mongosh --host mongos --port 27017 /mongo-init/03-final-check.js

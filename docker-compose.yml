@@ -5,11 +5,6 @@ services:
     command: mongod --configsvr --replSet cfgRS --port 27019 --bind_ip_all
     volumes:
       - cfg1_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--port", "27019", "--eval", "db.adminCommand({ ping: 1 })"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
 
   cfg2:
     image: mongo:8.0
@@ -17,11 +12,6 @@ services:
     command: mongod --configsvr --replSet cfgRS --port 27019 --bind_ip_all
     volumes:
       - cfg2_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--port", "27019", "--eval", "db.adminCommand({ ping: 1 })"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
 
   cfg3:
     image: mongo:8.0
@@ -29,11 +19,6 @@ services:
     command: mongod --configsvr --replSet cfgRS --port 27019 --bind_ip_all
     volumes:
       - cfg3_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--port", "27019", "--eval", "db.adminCommand({ ping: 1 })"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
 
   s1a:
     image: mongo:8.0
@@ -41,11 +26,6 @@ services:
     command: mongod --shardsvr --replSet shard1RS --port 27018 --bind_ip_all
     volumes:
       - s1a_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--port", "27018", "--eval", "db.adminCommand({ ping: 1 })"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
 
   s1b:
     image: mongo:8.0
@@ -53,11 +33,6 @@ services:
     command: mongod --shardsvr --replSet shard1RS --port 27018 --bind_ip_all
     volumes:
       - s1b_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--port", "27018", "--eval", "db.adminCommand({ ping: 1 })"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
 
   s1c:
     image: mongo:8.0
@@ -65,11 +40,6 @@ services:
     command: mongod --shardsvr --replSet shard1RS --port 27018 --bind_ip_all
     volumes:
       - s1c_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--port", "27018", "--eval", "db.adminCommand({ ping: 1 })"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
 
   s2a:
     image: mongo:8.0
@@ -77,11 +47,6 @@ services:
     command: mongod --shardsvr --replSet shard2RS --port 27018 --bind_ip_all
     volumes:
       - s2a_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--port", "27018", "--eval", "db.adminCommand({ ping: 1 })"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
 
   s2b:
     image: mongo:8.0
@@ -89,11 +54,6 @@ services:
     command: mongod --shardsvr --replSet shard2RS --port 27018 --bind_ip_all
     volumes:
       - s2b_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--port", "27018", "--eval", "db.adminCommand({ ping: 1 })"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
 
   s2c:
     image: mongo:8.0
@@ -101,11 +61,6 @@ services:
     command: mongod --shardsvr --replSet shard2RS --port 27018 --bind_ip_all
     volumes:
       - s2c_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--port", "27018", "--eval", "db.adminCommand({ ping: 1 })"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
 
   s3a:
     image: mongo:8.0
@@ -113,11 +68,6 @@ services:
     command: mongod --shardsvr --replSet shard3RS --port 27018 --bind_ip_all
     volumes:
       - s3a_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--port", "27018", "--eval", "db.adminCommand({ ping: 1 })"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
 
   s3b:
     image: mongo:8.0
@@ -125,11 +75,6 @@ services:
     command: mongod --shardsvr --replSet shard3RS --port 27018 --bind_ip_all
     volumes:
       - s3b_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--port", "27018", "--eval", "db.adminCommand({ ping: 1 })"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
 
   s3c:
     image: mongo:8.0
@@ -137,29 +82,20 @@ services:
     command: mongod --shardsvr --replSet shard3RS --port 27018 --bind_ip_all
     volumes:
       - s3c_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--port", "27018", "--eval", "db.adminCommand({ ping: 1 })"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
 
-  mongos:
-    image: mongo:8.0
-    container_name: mongos
-    depends_on:
-      - cfg1
-      - cfg2
-      - cfg3
-    command: mongos --configdb cfgRS/cfg1:27019,cfg2:27019,cfg3:27019 --bind_ip_all --port 27017
-    ports:
-      - "27017:27017"
-    volumes:
-      - ./data:/import:ro
-    healthcheck:
-      test: ["CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand({ ping: 1 })"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
+  mongos:  
+   image: mongo:8.0  
+   container_name: mongos  
+   depends_on:  
+     - cfg1  
+     - cfg2  
+     - cfg3  
+   volumes:  
+     - ./data:/import:ro  
+     - ./scripts/start-mongos.sh:/scripts/start-mongos.sh:ro  
+   command: ["/bin/bash", "/scripts/start-mongos.sh"]  
+   ports:  
+     - "27017:27017"
 
   setup:
     image: mongo:8.0
@@ -182,6 +118,7 @@ services:
       - ./scripts/setup-cluster.sh:/scripts/setup-cluster.sh:ro
       - ./mongo-init:/mongo-init:ro
       - ./data:/import:ro
+      - setup_state:/setup-state
     entrypoint: ["/bin/bash", "/scripts/setup-cluster.sh"]
 
 volumes:
@@ -197,3 +134,4 @@ volumes:
   s3a_data:
   s3b_data:
   s3c_data:
+  setup_state:
