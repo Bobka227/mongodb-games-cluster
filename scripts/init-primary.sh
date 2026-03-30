@@ -15,8 +15,9 @@ echo "[$HOSTNAME] Starting mongod on port $PORT..."
 MONGOD_PID=$!
 
 echo "[$HOSTNAME] Waiting for local mongod..."
-until mongosh --host 127.0.0.1 --port "$PORT" --quiet \
-  --eval 'db.adminCommand({ping:1}).ok' 2>/dev/null | grep -q 1; do
+until mongosh "mongodb://127.0.0.1:$PORT" \
+  --eval 'try { print(db.adminCommand({ping:1}).ok) } catch(e) { print(0) }' \
+  2>/dev/null | grep -q "^1"; do
   if ! kill -0 $MONGOD_PID 2>/dev/null; then
     echo "[$HOSTNAME] ERROR: mongod exited unexpectedly"
     exit 1
