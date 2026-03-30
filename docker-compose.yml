@@ -166,6 +166,10 @@ services:
       - mongos
     ports:
       - "8080:8080"
+    command: ["--mongo-uri", "mongodb://${MONGO_ADMIN_USER}:${MONGO_ADMIN_PASSWORD}@mongos:27017/?authSource=admin"]
+    environment:
+      MONGO_ADMIN_USER: "${MONGO_ADMIN_USER}"
+      MONGO_ADMIN_PASSWORD: "${MONGO_ADMIN_PASSWORD}"
     restart: unless-stopped
 
   setup:
