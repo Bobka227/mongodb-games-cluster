@@ -6,15 +6,15 @@ MONGO_USER="${MONGO_ADMIN_USER:-admin}"
 MONGO_PASS="${MONGO_ADMIN_PASSWORD:-admin}"
 
 mongosh_shard() {
-  local host="$1"; shift
-  mongosh --host "$host" --port 27018 \
+  local container="$1"; shift
+  docker exec "$container" mongosh --port 27018 \
     -u "$MONGO_USER" -p "$MONGO_PASS" \
     --authenticationDatabase admin --quiet "$@"
 }
 
 rs_members() {
-  local host="$1"
-  mongosh_shard "$host" --eval \
+  local container="$1"
+  mongosh_shard "$container" --eval \
     'rs.status().members.forEach(m => print(m.name + " -> " + m.stateStr))'
 }
 
@@ -44,7 +44,7 @@ echo "    Waiting for automatic election (10s)..."
 sleep 12
 
 echo "--- [5] State after PRIMARY failure (checking s1c) ---"
-mongosh --host s1c --port 27018 \
+docker exec s1c mongosh --port 27018 \
   -u "$MONGO_USER" -p "$MONGO_PASS" \
   --authenticationDatabase admin --quiet \
   --eval 'rs.status().members.forEach(m => print(m.name + " -> " + m.stateStr))'
