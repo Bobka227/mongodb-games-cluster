@@ -26,22 +26,21 @@ until mongosh "mongodb://127.0.0.1:$PORT" \
 done
 
 echo "[$HOSTNAME] Creating admin user via localhost exception..."
-mongosh --host 127.0.0.1 --port "$PORT" --quiet --eval "
+mongosh --host 127.0.0.1 --port "$PORT" --eval "
   try {
     const admin = db.getSiblingDB('admin');
-    const count = admin.system.users.countDocuments({user: '${MONGO_ADMIN_USER}'});
-    if (count === 0) {
-      admin.createUser({
-        user: '${MONGO_ADMIN_USER}',
-        pwd: '${MONGO_ADMIN_PASSWORD}',
-        roles: [{ role: 'root', db: 'admin' }]
-      });
-      print('[${HOSTNAME}] Admin user created');
-    } else {
-      print('[${HOSTNAME}] Admin user already exists');
-    }
+    admin.createUser({
+      user: '${MONGO_ADMIN_USER}',
+      pwd: '${MONGO_ADMIN_PASSWORD}',
+      roles: [{ role: 'root', db: 'admin' }]
+    });
+    print('[${HOSTNAME}] Admin user created');
   } catch(e) {
-    print('[${HOSTNAME}] createUser error: ' + e);
+    if (e.code === 51003 || String(e).includes('already exists')) {
+      print('[${HOSTNAME}] Admin user already exists, skipping');
+    } else {
+      print('[${HOSTNAME}] createUser error (code=' + e.code + '): ' + e);
+    }
   }
 " 2>&1 || true
 
