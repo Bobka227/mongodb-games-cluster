@@ -8,6 +8,9 @@ services:
       MONGOD_PORT: "27019"
       MONGO_ADMIN_USER: "${MONGO_ADMIN_USER}"
       MONGO_ADMIN_PASSWORD: "${MONGO_ADMIN_PASSWORD}"
+      RS_NAME: "cfgRS"
+      RS_MEMBERS: "cfg1:27019,cfg2:27019,cfg3:27019"
+      IS_CONFIGSVR: "true"
     volumes:
       - cfg1_data:/data/db
       - ./secrets/keyfile:/run/secrets/keyfile:ro
@@ -42,6 +45,8 @@ services:
       MONGOD_PORT: "27018"
       MONGO_ADMIN_USER: "${MONGO_ADMIN_USER}"
       MONGO_ADMIN_PASSWORD: "${MONGO_ADMIN_PASSWORD}"
+      RS_NAME: "shard1RS"
+      RS_MEMBERS: "s1a:27018,s1b:27018,s1c:27018"
     volumes:
       - s1a_data:/data/db
       - ./secrets/keyfile:/run/secrets/keyfile:ro
@@ -76,6 +81,8 @@ services:
       MONGOD_PORT: "27018"
       MONGO_ADMIN_USER: "${MONGO_ADMIN_USER}"
       MONGO_ADMIN_PASSWORD: "${MONGO_ADMIN_PASSWORD}"
+      RS_NAME: "shard2RS"
+      RS_MEMBERS: "s2a:27018,s2b:27018,s2c:27018"
     volumes:
       - s2a_data:/data/db
       - ./secrets/keyfile:/run/secrets/keyfile:ro
@@ -110,6 +117,8 @@ services:
       MONGOD_PORT: "27018"
       MONGO_ADMIN_USER: "${MONGO_ADMIN_USER}"
       MONGO_ADMIN_PASSWORD: "${MONGO_ADMIN_PASSWORD}"
+      RS_NAME: "shard3RS"
+      RS_MEMBERS: "s3a:27018,s3b:27018,s3c:27018"
     volumes:
       - s3a_data:/data/db
       - ./secrets/keyfile:/run/secrets/keyfile:ro
