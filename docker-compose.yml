@@ -1,7 +1,27 @@
 services:
+  keygen:
+    image: mongo:8.0
+    container_name: mongo-keygen
+    volumes:
+      - ./secrets:/secrets
+    command: >
+      bash -c "
+        if [ ! -f /secrets/keyfile ]; then
+          openssl rand -base64 756 > /secrets/keyfile &&
+          chmod 400 /secrets/keyfile &&
+          echo 'Keyfile generated';
+        else
+          echo 'Keyfile already exists';
+        fi
+      "
+    restart: "no"
+
   cfg1:
     image: mongo:8.0
     container_name: cfg1
+    depends_on:
+      keygen:
+        condition: service_completed_successfully
     entrypoint: ["/bin/bash", "/scripts/init-primary.sh"]
     command: ["mongod", "--configsvr", "--replSet", "cfgRS", "--port", "27019", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
     environment:
@@ -19,6 +39,9 @@ services:
   cfg2:
     image: mongo:8.0
     container_name: cfg2
+    depends_on:
+      keygen:
+        condition: service_completed_successfully
     entrypoint: ["/bin/bash", "/scripts/setup-keyfile.sh"]
     command: ["mongod", "--configsvr", "--replSet", "cfgRS", "--port", "27019", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
     volumes:
@@ -29,6 +52,9 @@ services:
   cfg3:
     image: mongo:8.0
     container_name: cfg3
+    depends_on:
+      keygen:
+        condition: service_completed_successfully
     entrypoint: ["/bin/bash", "/scripts/setup-keyfile.sh"]
     command: ["mongod", "--configsvr", "--replSet", "cfgRS", "--port", "27019", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
     volumes:
@@ -39,6 +65,9 @@ services:
   s1a:
     image: mongo:8.0
     container_name: s1a
+    depends_on:
+      keygen:
+        condition: service_completed_successfully
     entrypoint: ["/bin/bash", "/scripts/init-primary.sh"]
     command: ["mongod", "--shardsvr", "--replSet", "shard1RS", "--port", "27018", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
     environment:
@@ -55,6 +84,9 @@ services:
   s1b:
     image: mongo:8.0
     container_name: s1b
+    depends_on:
+      keygen:
+        condition: service_completed_successfully
     entrypoint: ["/bin/bash", "/scripts/setup-keyfile.sh"]
     command: ["mongod", "--shardsvr", "--replSet", "shard1RS", "--port", "27018", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
     volumes:
@@ -65,6 +97,9 @@ services:
   s1c:
     image: mongo:8.0
     container_name: s1c
+    depends_on:
+      keygen:
+        condition: service_completed_successfully
     entrypoint: ["/bin/bash", "/scripts/setup-keyfile.sh"]
     command: ["mongod", "--shardsvr", "--replSet", "shard1RS", "--port", "27018", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
     volumes:
@@ -75,6 +110,9 @@ services:
   s2a:
     image: mongo:8.0
     container_name: s2a
+    depends_on:
+      keygen:
+        condition: service_completed_successfully
     entrypoint: ["/bin/bash", "/scripts/init-primary.sh"]
     command: ["mongod", "--shardsvr", "--replSet", "shard2RS", "--port", "27018", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
     environment:
@@ -91,6 +129,9 @@ services:
   s2b:
     image: mongo:8.0
     container_name: s2b
+    depends_on:
+      keygen:
+        condition: service_completed_successfully
     entrypoint: ["/bin/bash", "/scripts/setup-keyfile.sh"]
     command: ["mongod", "--shardsvr", "--replSet", "shard2RS", "--port", "27018", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
     volumes:
@@ -101,6 +142,9 @@ services:
   s2c:
     image: mongo:8.0
     container_name: s2c
+    depends_on:
+      keygen:
+        condition: service_completed_successfully
     entrypoint: ["/bin/bash", "/scripts/setup-keyfile.sh"]
     command: ["mongod", "--shardsvr", "--replSet", "shard2RS", "--port", "27018", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
     volumes:
@@ -111,6 +155,9 @@ services:
   s3a:
     image: mongo:8.0
     container_name: s3a
+    depends_on:
+      keygen:
+        condition: service_completed_successfully
     entrypoint: ["/bin/bash", "/scripts/init-primary.sh"]
     command: ["mongod", "--shardsvr", "--replSet", "shard3RS", "--port", "27018", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
     environment:
@@ -127,6 +174,9 @@ services:
   s3b:
     image: mongo:8.0
     container_name: s3b
+    depends_on:
+      keygen:
+        condition: service_completed_successfully
     entrypoint: ["/bin/bash", "/scripts/setup-keyfile.sh"]
     command: ["mongod", "--shardsvr", "--replSet", "shard3RS", "--port", "27018", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
     volumes:
@@ -137,6 +187,9 @@ services:
   s3c:
     image: mongo:8.0
     container_name: s3c
+    depends_on:
+      keygen:
+        condition: service_completed_successfully
     entrypoint: ["/bin/bash", "/scripts/setup-keyfile.sh"]
     command: ["mongod", "--shardsvr", "--replSet", "shard3RS", "--port", "27018", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
     volumes:
@@ -148,9 +201,14 @@ services:
     image: mongo:8.0
     container_name: mongos
     depends_on:
-      - cfg1
-      - cfg2
-      - cfg3
+      keygen:
+        condition: service_completed_successfully
+      cfg1:
+        condition: service_started
+      cfg2:
+        condition: service_started
+      cfg3:
+        condition: service_started
     entrypoint: ["/bin/bash", "/scripts/start-mongos.sh"]
     ports:
       - "27017:27017"
@@ -163,7 +221,10 @@ services:
     image: haohanyang/compass-web:latest
     container_name: mongo-compass
     depends_on:
-      - mongos
+      keygen:
+        condition: service_completed_successfully
+      mongos:
+        condition: service_started
     ports:
       - "8080:8080"
     command: ["compass-web", "--host", "0.0.0.0", "--mongo-uri", "mongodb://${MONGO_ADMIN_USER}:${MONGO_ADMIN_PASSWORD}@mongos:27017/?authSource=admin"]
@@ -173,19 +234,34 @@ services:
     image: mongo:8.0
     container_name: mongo-setup
     depends_on:
-      - cfg1
-      - cfg2
-      - cfg3
-      - s1a
-      - s1b
-      - s1c
-      - s2a
-      - s2b
-      - s2c
-      - s3a
-      - s3b
-      - s3c
-      - mongos
+      keygen:
+        condition: service_completed_successfully
+      cfg1:
+        condition: service_started
+      cfg2:
+        condition: service_started
+      cfg3:
+        condition: service_started
+      s1a:
+        condition: service_started
+      s1b:
+        condition: service_started
+      s1c:
+        condition: service_started
+      s2a:
+        condition: service_started
+      s2b:
+        condition: service_started
+      s2c:
+        condition: service_started
+      s3a:
+        condition: service_started
+      s3b:
+        condition: service_started
+      s3c:
+        condition: service_started
+      mongos:
+        condition: service_started
     environment:
       MONGO_ADMIN_USER: "${MONGO_ADMIN_USER}"
       MONGO_ADMIN_PASSWORD: "${MONGO_ADMIN_PASSWORD}"
