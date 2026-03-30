@@ -2,100 +2,153 @@ services:
   cfg1:
     image: mongo:8.0
     container_name: cfg1
-    command: mongod --configsvr --replSet cfgRS --port 27019 --bind_ip_all
+    entrypoint: ["/bin/bash", "/scripts/init-primary.sh"]
+    command: ["mongod", "--configsvr", "--replSet", "cfgRS", "--port", "27019", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
+    environment:
+      MONGOD_PORT: "27019"
+      MONGO_ADMIN_USER: "${MONGO_ADMIN_USER}"
+      MONGO_ADMIN_PASSWORD: "${MONGO_ADMIN_PASSWORD}"
     volumes:
       - cfg1_data:/data/db
+      - ./secrets/keyfile:/run/secrets/keyfile:ro
+      - ./scripts:/scripts:ro
 
   cfg2:
     image: mongo:8.0
     container_name: cfg2
-    command: mongod --configsvr --replSet cfgRS --port 27019 --bind_ip_all
+    entrypoint: ["/bin/bash", "/scripts/setup-keyfile.sh"]
+    command: ["mongod", "--configsvr", "--replSet", "cfgRS", "--port", "27019", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
     volumes:
       - cfg2_data:/data/db
+      - ./secrets/keyfile:/run/secrets/keyfile:ro
+      - ./scripts:/scripts:ro
 
   cfg3:
     image: mongo:8.0
     container_name: cfg3
-    command: mongod --configsvr --replSet cfgRS --port 27019 --bind_ip_all
+    entrypoint: ["/bin/bash", "/scripts/setup-keyfile.sh"]
+    command: ["mongod", "--configsvr", "--replSet", "cfgRS", "--port", "27019", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
     volumes:
       - cfg3_data:/data/db
+      - ./secrets/keyfile:/run/secrets/keyfile:ro
+      - ./scripts:/scripts:ro
 
   s1a:
     image: mongo:8.0
     container_name: s1a
-    command: mongod --shardsvr --replSet shard1RS --port 27018 --bind_ip_all
+    entrypoint: ["/bin/bash", "/scripts/init-primary.sh"]
+    command: ["mongod", "--shardsvr", "--replSet", "shard1RS", "--port", "27018", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
+    environment:
+      MONGOD_PORT: "27018"
+      MONGO_ADMIN_USER: "${MONGO_ADMIN_USER}"
+      MONGO_ADMIN_PASSWORD: "${MONGO_ADMIN_PASSWORD}"
     volumes:
       - s1a_data:/data/db
+      - ./secrets/keyfile:/run/secrets/keyfile:ro
+      - ./scripts:/scripts:ro
 
   s1b:
     image: mongo:8.0
     container_name: s1b
-    command: mongod --shardsvr --replSet shard1RS --port 27018 --bind_ip_all
+    entrypoint: ["/bin/bash", "/scripts/setup-keyfile.sh"]
+    command: ["mongod", "--shardsvr", "--replSet", "shard1RS", "--port", "27018", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
     volumes:
       - s1b_data:/data/db
+      - ./secrets/keyfile:/run/secrets/keyfile:ro
+      - ./scripts:/scripts:ro
 
   s1c:
     image: mongo:8.0
     container_name: s1c
-    command: mongod --shardsvr --replSet shard1RS --port 27018 --bind_ip_all
+    entrypoint: ["/bin/bash", "/scripts/setup-keyfile.sh"]
+    command: ["mongod", "--shardsvr", "--replSet", "shard1RS", "--port", "27018", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
     volumes:
       - s1c_data:/data/db
+      - ./secrets/keyfile:/run/secrets/keyfile:ro
+      - ./scripts:/scripts:ro
 
   s2a:
     image: mongo:8.0
     container_name: s2a
-    command: mongod --shardsvr --replSet shard2RS --port 27018 --bind_ip_all
+    entrypoint: ["/bin/bash", "/scripts/init-primary.sh"]
+    command: ["mongod", "--shardsvr", "--replSet", "shard2RS", "--port", "27018", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
+    environment:
+      MONGOD_PORT: "27018"
+      MONGO_ADMIN_USER: "${MONGO_ADMIN_USER}"
+      MONGO_ADMIN_PASSWORD: "${MONGO_ADMIN_PASSWORD}"
     volumes:
       - s2a_data:/data/db
+      - ./secrets/keyfile:/run/secrets/keyfile:ro
+      - ./scripts:/scripts:ro
 
   s2b:
     image: mongo:8.0
     container_name: s2b
-    command: mongod --shardsvr --replSet shard2RS --port 27018 --bind_ip_all
+    entrypoint: ["/bin/bash", "/scripts/setup-keyfile.sh"]
+    command: ["mongod", "--shardsvr", "--replSet", "shard2RS", "--port", "27018", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
     volumes:
       - s2b_data:/data/db
+      - ./secrets/keyfile:/run/secrets/keyfile:ro
+      - ./scripts:/scripts:ro
 
   s2c:
     image: mongo:8.0
     container_name: s2c
-    command: mongod --shardsvr --replSet shard2RS --port 27018 --bind_ip_all
+    entrypoint: ["/bin/bash", "/scripts/setup-keyfile.sh"]
+    command: ["mongod", "--shardsvr", "--replSet", "shard2RS", "--port", "27018", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
     volumes:
       - s2c_data:/data/db
+      - ./secrets/keyfile:/run/secrets/keyfile:ro
+      - ./scripts:/scripts:ro
 
   s3a:
     image: mongo:8.0
     container_name: s3a
-    command: mongod --shardsvr --replSet shard3RS --port 27018 --bind_ip_all
+    entrypoint: ["/bin/bash", "/scripts/init-primary.sh"]
+    command: ["mongod", "--shardsvr", "--replSet", "shard3RS", "--port", "27018", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
+    environment:
+      MONGOD_PORT: "27018"
+      MONGO_ADMIN_USER: "${MONGO_ADMIN_USER}"
+      MONGO_ADMIN_PASSWORD: "${MONGO_ADMIN_PASSWORD}"
     volumes:
       - s3a_data:/data/db
+      - ./secrets/keyfile:/run/secrets/keyfile:ro
+      - ./scripts:/scripts:ro
 
   s3b:
     image: mongo:8.0
     container_name: s3b
-    command: mongod --shardsvr --replSet shard3RS --port 27018 --bind_ip_all
+    entrypoint: ["/bin/bash", "/scripts/setup-keyfile.sh"]
+    command: ["mongod", "--shardsvr", "--replSet", "shard3RS", "--port", "27018", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
     volumes:
       - s3b_data:/data/db
+      - ./secrets/keyfile:/run/secrets/keyfile:ro
+      - ./scripts:/scripts:ro
 
   s3c:
     image: mongo:8.0
     container_name: s3c
-    command: mongod --shardsvr --replSet shard3RS --port 27018 --bind_ip_all
+    entrypoint: ["/bin/bash", "/scripts/setup-keyfile.sh"]
+    command: ["mongod", "--shardsvr", "--replSet", "shard3RS", "--port", "27018", "--bind_ip_all", "--keyFile", "/etc/mongo/keyfile"]
     volumes:
       - s3c_data:/data/db
+      - ./secrets/keyfile:/run/secrets/keyfile:ro
+      - ./scripts:/scripts:ro
 
-  mongos:  
-   image: mongo:8.0  
-   container_name: mongos  
-   depends_on:  
-     - cfg1  
-     - cfg2  
-     - cfg3  
-   volumes:  
-     - ./data:/import:ro  
-     - ./scripts/start-mongos.sh:/scripts/start-mongos.sh:ro  
-   command: ["/bin/bash", "/scripts/start-mongos.sh"]  
-   ports:  
-     - "27017:27017"
+  mongos:
+    image: mongo:8.0
+    container_name: mongos
+    depends_on:
+      - cfg1
+      - cfg2
+      - cfg3
+    entrypoint: ["/bin/bash", "/scripts/start-mongos.sh"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./data:/import:ro
+      - ./scripts:/scripts:ro
+      - ./secrets/keyfile:/run/secrets/keyfile:ro
 
   setup:
     image: mongo:8.0
@@ -114,6 +167,9 @@ services:
       - s3b
       - s3c
       - mongos
+    environment:
+      MONGO_ADMIN_USER: "${MONGO_ADMIN_USER}"
+      MONGO_ADMIN_PASSWORD: "${MONGO_ADMIN_PASSWORD}"
     volumes:
       - ./scripts/setup-cluster.sh:/scripts/setup-cluster.sh:ro
       - ./mongo-init:/mongo-init:ro

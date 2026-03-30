@@ -1,0 +1,48 @@
+#!/bin/bash
+# Entrypoint for PRIMARY nodes (cfg1, s1a, s2a, s3a).
+# Starts mongod, waits for it, creates admin user via localhost exception.
+set -e
+
+PORT="${MONGOD_PORT:-27017}"
+
+# Copy keyfile and set correct permissions (mongod requires owner-only read)
+mkdir -p /etc/mongo
+cp /run/secrets/keyfile /etc/mongo/keyfile
+chmod 400 /etc/mongo/keyfile
+
+echo "[$HOSTNAME] Starting mongod on port $PORT..."
+"$@" &
+MONGOD_PID=$!
+
+echo "[$HOSTNAME] Waiting for local mongod..."
+until mongosh --host 127.0.0.1 --port "$PORT" --quiet \
+  --eval 'db.adminCommand({ping:1}).ok' 2>/dev/null | grep -q 1; do
+  if ! kill -0 $MONGOD_PID 2>/dev/null; then
+    echo "[$HOSTNAME] ERROR: mongod exited unexpectedly"
+    exit 1
+  fi
+  sleep 1
+done
+
+echo "[$HOSTNAME] Creating admin user via localhost exception..."
+mongosh --host 127.0.0.1 --port "$PORT" --quiet --eval "
+  try {
+    const admin = db.getSiblingDB('admin');
+    const count = admin.system.users.countDocuments({user: '${MONGO_ADMIN_USER}'});
+    if (count === 0) {
+      admin.createUser({
+        user: '${MONGO_ADMIN_USER}',
+        pwd: '${MONGO_ADMIN_PASSWORD}',
+        roles: [{ role: 'root', db: 'admin' }]
+      });
+      print('[${HOSTNAME}] Admin user created');
+    } else {
+      print('[${HOSTNAME}] Admin user already exists');
+    }
+  } catch(e) {
+    print('[${HOSTNAME}] createUser error: ' + e);
+  }
+" 2>&1 || true
+
+echo "[$HOSTNAME] Init complete, mongod running."
+wait $MONGOD_PID
