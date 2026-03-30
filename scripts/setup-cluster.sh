@@ -165,8 +165,7 @@ ensure_shard_rs s2a shard2RS s2a:27018 s2b:27018 s2c:27018
 ensure_shard_rs s3a shard3RS s3a:27018 s3b:27018 s3c:27018
 
 wait_rs_primary s1a 27018 shard1RS
-wait_rs_primary
-s2a 27018 shard2RS
+wait_rs_primary s2a 27018 shard2RS
 wait_rs_primary s3a 27018 shard3RS
 
 echo "=== Waiting for mongos ==="
