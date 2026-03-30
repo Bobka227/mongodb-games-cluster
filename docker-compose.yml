@@ -166,8 +166,7 @@ services:
       - mongos
     ports:
       - "8080:8080"
-    environment:
-      MONGO_URI: "mongodb://${MONGO_ADMIN_USER}:${MONGO_ADMIN_PASSWORD}@mongos:27017/?authSource=admin"
+    command: ["compass-web", "--host", "0.0.0.0", "--mongo-uri", "mongodb://${MONGO_ADMIN_USER}:${MONGO_ADMIN_PASSWORD}@mongos:27017/?authSource=admin"]
     restart: unless-stopped
 
   setup:
