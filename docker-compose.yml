@@ -159,6 +159,15 @@ services:
       - ./scripts:/scripts:ro
       - ./secrets/keyfile:/run/secrets/keyfile:ro
 
+  compass:
+    image: haohanyang/compass-web:latest
+    container_name: mongo-compass
+    depends_on:
+      - mongos
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
   setup:
     image: mongo:8.0
     container_name: mongo-setup
