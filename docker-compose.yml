@@ -6,7 +6,7 @@ services:
       - ./secrets:/secrets
     command: >
       bash -c "
-        if [ ! -f /secrets/keyfile ]; then
+        if [ ! -s /secrets/keyfile ]; then
           openssl rand -base64 756 > /secrets/keyfile &&
           chmod 400 /secrets/keyfile &&
           echo 'Keyfile generated';

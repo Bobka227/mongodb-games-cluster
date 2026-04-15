@@ -133,21 +133,22 @@ db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
 ]);
 
 
-// --- Dotaz 3: Vývoj průměrné ceny a hodnocení po dekádách s $bucket ---
+// --- Dotaz 3: Vývoj průměrné ceny a hodnocení her v čase + top žánry podle epoch ---
 // Zadání: Jak se vyvíjela průměrná cena her a hodnocení kritiků v čase?
-// Rozděl hry do časových pásem a zjisti trend herního průmyslu.
+// Rozděl hry do časových pásem a zjisti trend herního průmyslu,
+// zároveň určete nejčastější žánry v jednotlivých obdobích.
 //
-// Obecně: $bucket rozdělí dokumenty do pevně definovaných intervalů
-// podle release_year. $unwind rozbalí pole žánrů a $group uvnitř
-// $facet počítá top žánr pro každou epochu. Kombinace $bucket +
-// $facet umožňuje v jednom průchodu dat získat více různých pohledů.
-// Konkrétně: Výsledek ukazuje, zda hry zdražují, zda roste nebo
-// klesá průměrné hodnocení a jaký žánr dominuje v každé epoše.
+// Obecně: $bucket rozděluje hry do časových intervalů podle release_year.
+// $facet umožňuje v jednom průchodu dat získat více analytických pohledů.
+// První větev počítá trend počtu her, průměrné ceny a hodnocení,
+// druhá větev pomocí $unwind, $group a $sort určuje top žánry v jednotlivých epochách.
+//
+// Konkrétně: Výsledek ukazuje, zda hry v čase zdražují,
+// jak se mění jejich hodnocení a které žánry v jednotlivých obdobích převažují.
 db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
   {
     $match: {
-      release_year: { $gte: 1995, $lte: 2024,
-                      $type: ["int","long","double"] }
+      release_year: { $gte: 1995, $lte: 2024, $type: ["int", "long", "double"] }
     }
   },
   {
@@ -159,17 +160,18 @@ db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
             boundaries: [1995, 2000, 2005, 2010, 2015, 2018, 2021, 2025],
             default: "other",
             output: {
-              game_count:  { $sum: 1 },
-              avg_price:   { $avg: "$price" },
-              avg_critic:  { $avg: "$critic_score" },
-              platforms:   { $addToSet: "$source_platform" }
+              game_count: { $sum: 1 },
+              avg_price: { $avg: "$price" },
+              avg_critic: { $avg: "$critic_score" },
+              platforms: { $addToSet: "$source_platform" }
             }
           }
         },
         {
           $project: {
-            epoch: "$_id", game_count: 1,
-            avg_price:  { $round: ["$avg_price",  2] },
+            epoch: "$_id",
+            game_count: 1,
+            avg_price: { $round: ["$avg_price", 2] },
             avg_critic: { $round: ["$avg_critic", 1] },
             platform_count: { $size: "$platforms" },
             _id: 0
@@ -180,13 +182,42 @@ db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
         { $match: { genre: { $type: "array", $ne: [] } } },
         { $unwind: "$genre" },
         {
-          $bucket: {
-            groupBy: "$release_year",
-            boundaries: [1995, 2005, 2015, 2025],
-            default: "other",
-            output: {
-              genres: { $push: "$genre" }
+          $addFields: {
+            epoch: {
+              $switch: {
+                branches: [
+                  { case: { $and: [{ $gte: ["$release_year", 1995] }, { $lt: ["$release_year", 2005] }] }, then: "1995-2004" },
+                  { case: { $and: [{ $gte: ["$release_year", 2005] }, { $lt: ["$release_year", 2015] }] }, then: "2005-2014" },
+                  { case: { $and: [{ $gte: ["$release_year", 2015] }, { $lt: ["$release_year", 2025] }] }, then: "2015-2024" }
+                ],
+                default: "other"
+              }
             }
+          }
+        },
+        {
+          $group: {
+            _id: { epoch: "$epoch", genre: "$genre" },
+            count: { $sum: 1 }
+          }
+        },
+        { $sort: { "_id.epoch": 1, count: -1 } },
+        {
+          $group: {
+            _id: "$_id.epoch",
+            top_genres: {
+              $push: {
+                genre: "$_id.genre",
+                count: "$count"
+              }
+            }
+          }
+        },
+        {
+          $project: {
+            epoch: "$_id",
+            top_genres: { $slice: ["$top_genres", 5] },
+            _id: 0
           }
         }
       ]
@@ -196,15 +227,20 @@ db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
 
 
 // --- Dotaz 4: Vydavatelé s hrami napříč více platformami ---
-// Zadání: Kteří vydavatelé vydali hry na všech třech platformách?
-// Pro každého multi-platformního vydavatele zobraz jeho portfolio.
+// Zadání: Kteří vydavatelé vydali hry alespoň na dvou platformách
+// a jak rozsáhlé je jejich portfolio?
 //
-// Obecně: Pipeline používá $group s $addToSet pro sbírání unikátních
-// platforem, $project s $size pro počítání, $match pro filtrování
-// vydavatelů přítomných na 2+ platformách, $sort a $limit.
-// $push sbírá vzorkové tituly do pole, $slice omezuje délku.
-// Konkrétně: Ukazuje, kteří vydavatelé (např. EA, Ubisoft) jsou
-// skutečně multi-platformní a kolik titulů mají na každé platformě.
+// Obecně: Pipeline používá $group s $addToSet pro získání množiny
+// unikátních platforem, na kterých se hry daného vydavatele objevují.
+// Pomocí $sum počítá celkový počet her, pomocí $avg průměrné hodnocení
+// kritiků a pomocí $push ukládá ukázkové názvy titulů. $project následně
+// dopočítá počet platforem přes $size a omezí počet ukázkových titulů
+// pomocí $slice. $match filtruje pouze vydavatele přítomné alespoň
+// na dvou platformách, poté následuje řazení a omezení výsledků.
+//
+// Konkrétně: Výsledek ukazuje, kteří vydavatelé jsou skutečně
+// multi-platformní, na kolika platformách působí, kolik her celkem vydali
+// a jaké tituly z jejich portfolia se v datech vyskytují.
 db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
   { $match: { publisher: { $ne: null } } },
   {
@@ -233,33 +269,43 @@ db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
 ]);
 
 
-// --- Dotaz 5: Korelační matice – cena vs hodnocení podle žánru ---
-// Zadání: Existuje vztah mezi cenou hry a hodnocením kritiků?
-// Analyzuj pro každý žánr zvlášť a zjisti, kde je korelace nejsilnější.
+// --- Dotaz 5: Korelace mezi cenou a průměrnou herní dobou podle žánru ---
+// Zadání: Existuje vztah mezi cenou hry a průměrnou herní dobou?
+// Analyzuj tento vztah zvlášť pro jednotlivé žánry a zjisti,
+// ve kterých žánrech je korelace nejsilnější.
 //
-// Obecně: $unwind rozbalí pole žánrů, $group počítá agregáty potřebné
-// pro výpočet korelačního koeficientu Pearson:
-//   r = (n·Σxy − Σx·Σy) / sqrt((n·Σx² − (Σx)²)·(n·Σy² − (Σy)²))
-// Pipeline pak v $project provede tento výpočet nad agregovanými
-// hodnotami. Výsledek ukazuje skutečnou statistickou závislost.
+// Obecně: Pipeline nejprve vybere pouze dokumenty ze Steamu,
+// které obsahují cenu, průměrnou herní dobu a neprázdné pole žánrů.
+// Pomocí $unwind rozbalí jednotlivé žánry a následně v $group
+// spočítá agregované hodnoty potřebné pro výpočet Pearsonova
+// korelačního koeficientu. V části $project pak pomocí $let,
+// $subtract, $multiply, $sqrt a $divide vypočítá korelaci mezi
+// cenou a herní dobou pro každý žánr zvlášť.
+//
+// Konkrétně: Výsledek ukazuje, ve kterých žánrech mají dražší hry
+// tendenci nabízet delší herní dobu a kde naopak tato závislost
+// téměř neexistuje. To pomáhá interpretovat vztah mezi cenou
+// a obsahem hry v různých segmentech trhu.
+
 db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
   {
     $match: {
-      genre:        { $type: "array", $ne: [] },
-      price:        { $gt: 0, $type: ["double","int","long"] },
-      critic_score: { $gt: 0, $type: ["double","int","long"] }
+      source_platform: "steam",
+      genre: { $type: "array", $ne: [] },
+      price: { $gt: 0, $type: ["double", "int", "long"] },
+      average_playtime: { $gt: 0, $type: ["double", "int", "long"] }
     }
   },
   { $unwind: "$genre" },
   {
     $group: {
-      _id:    "$genre",
-      n:      { $sum: 1 },
-      sum_x:  { $sum: "$price" },
-      sum_y:  { $sum: "$critic_score" },
-      sum_xy: { $sum: { $multiply: ["$price", "$critic_score"] } },
+      _id: "$genre",
+      n: { $sum: 1 },
+      sum_x: { $sum: "$price" },
+      sum_y: { $sum: "$average_playtime" },
+      sum_xy: { $sum: { $multiply: ["$price", "$average_playtime"] } },
       sum_x2: { $sum: { $multiply: ["$price", "$price"] } },
-      sum_y2: { $sum: { $multiply: ["$critic_score", "$critic_score"] } }
+      sum_y2: { $sum: { $multiply: ["$average_playtime", "$average_playtime"] } }
     }
   },
   { $match: { n: { $gte: 50 } } },
@@ -270,25 +316,42 @@ db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
       pearson_r: {
         $let: {
           vars: {
-            num: { $subtract: [
-              { $multiply: ["$n", "$sum_xy"] },
-              { $multiply: ["$sum_x", "$sum_y"] }
-            ]},
-            den: { $sqrt: {
-              $multiply: [
-                { $subtract: [{ $multiply: ["$n","$sum_x2"] },
-                              { $multiply: ["$sum_x","$sum_x"] }] },
-                { $subtract: [{ $multiply: ["$n","$sum_y2"] },
-                              { $multiply: ["$sum_y","$sum_y"] }] }
+            num: {
+              $subtract: [
+                { $multiply: ["$n", "$sum_xy"] },
+                { $multiply: ["$sum_x", "$sum_y"] }
               ]
-            }}
+            },
+            den: {
+              $sqrt: {
+                $multiply: [
+                  {
+                    $subtract: [
+                      { $multiply: ["$n", "$sum_x2"] },
+                      { $multiply: ["$sum_x", "$sum_x"] }
+                    ]
+                  },
+                  {
+                    $subtract: [
+                      { $multiply: ["$n", "$sum_y2"] },
+                      { $multiply: ["$sum_y", "$sum_y"] }
+                    ]
+                  }
+                ]
+              }
+            }
           },
-          in: { $cond: [{ $eq: ["$$den", 0] }, null,
-                        { $divide: ["$$num", "$$den"] }] }
+          in: {
+            $cond: [
+              { $eq: ["$$den", 0] },
+              null,
+              { $divide: ["$$num", "$$den"] }
+            ]
+          }
         }
       },
-      avg_price:  { $round: [{ $divide: ["$sum_x", "$n"] }, 2] },
-      avg_critic: { $round: [{ $divide: ["$sum_y", "$n"] }, 1] },
+      avg_price: { $round: [{ $divide: ["$sum_x", "$n"] }, 2] },
+      avg_playtime: { $round: [{ $divide: ["$sum_y", "$n"] }, 1] },
       _id: 0
     }
   },
@@ -301,11 +364,17 @@ db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
 // Zadání: Jak se vyvíjelo hodnocení kritiků Nintendo her rok po roce?
 // Zobraz roční průměr a 3letý klouzavý průměr pro odfiltrování šumu.
 //
-// Obecně: $setWindowFields je operátor pro window funkce (MongoDB 5.0+).
-// Umožňuje výpočty přes sousední dokumenty bez změny počtu výstupních
-// dokumentů. Okno "range: [-1,1]" zahrnuje předchozí, aktuální a
-// následující rok. Kombinace s $group (pro roční průměr) a $sort
-// (pro správné okno) dává analýzu trendu s vyhlazením.
+// Obecně: $group nejprve agreguje data na úroveň jednotlivých roků
+// a vypočítá roční průměr hodnocení kritiků a počet her. Následné
+// $setWindowFields aplikuje okenní funkce nad seřazenými roky.
+// Okno range: [-1, 1] zahrnuje předchozí, aktuální a následující rok,
+// takže vzniká 3letý klouzavý průměr. Současně se počítá i kumulativní
+// počet her od začátku časové řady.
+//
+// Konkrétně: Výsledek ukazuje trend průměrného hodnocení Nintendo her
+// v čase a jeho vyhlazenou podobu. Zároveň je vidět, kolik her vstupuje
+// do výpočtu v jednotlivých letech, což je důležité pro interpretaci,
+// protože v některých rocích je počet her velmi nízký.
 db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
   {
     $match: {
@@ -359,75 +428,108 @@ db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
 // Zadání: Vytvoř referenční kolekci vydavatelů se statistikami
 // a spoj ji s herními záznamy pro obohacení dat.
 //
-// Obecně: $merge zapíše výsledek pipeline do nové kolekce.
-// Následný $lookup provede left outer join (ekvivalent SQL LEFT JOIN)
-// mezi games_unified_validated a publishers_metadata podle pole publisher.
-// $unwind s preserveNullAndEmptyArrays zachová hry bez vydavatele.
-// Konkrétně: Každá hra bude obohacena o statistiky svého vydavatele
-// (kolik má celkem her, na kolika platformách působí, avg cena).
+// Obecně: Dotaz je rozdělen do tří kroků.
+// V prvním kroku se odstraní stará pomocná kolekce publishers_metadata,
+// aby nevznikaly duplicity ze starších běhů. Ve druhém kroku se nad
+// touto kolekcí vytvoří unique index nad polem publisher_name, protože
+// následný $merge používá toto pole jako jednoznačný klíč pro párování.
+// Ve třetím kroku se z hlavní kolekce vytvoří agregované statistiky
+// vydavatelů a uloží se do publishers_metadata. Následně se pomocí
+// $lookup propojí konkrétní hry s těmito metadaty vydavatele.
+//
+// Konkrétně: Výsledek ukazuje dražší Steam hry s vyšším počtem
+// pozitivních hodnocení a zároveň je obohacuje o informace o vydavateli,
+// například kolik titulů celkem vydal, na kolika platformách působí
+// a jaká je průměrná cena jeho her.
 
-// Krok A: vytvoření publishers_metadata
+
+// Krok 0: odstranění staré pomocné kolekce
+db.getSiblingDB("gamesdb").publishers_metadata.drop();
+
+
+// Krok 1: vytvoření unique indexu pro bezpečný $merge podle publisher_name
+db.getSiblingDB("gamesdb").publishers_metadata.createIndex(
+  { publisher_name: 1 },
+  { unique: true }
+);
+
+
+// Krok 2: vytvoření pomocné kolekce publishers_metadata
 db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
   { $match: { publisher: { $ne: null } } },
   {
     $group: {
-      _id:           "$publisher",
-      total_titles:  { $sum: 1 },
-      platforms:     { $addToSet: "$source_platform" },
-      avg_price:     { $avg: "$price" },
-      avg_critic:    { $avg: "$critic_score" },
-      genres:        { $addToSet: { $arrayElemAt: ["$genre", 0] } }
+      _id: "$publisher",
+      total_titles: { $sum: 1 },
+      platforms: { $addToSet: "$source_platform" },
+      avg_price: { $avg: "$price" },
+      avg_critic: { $avg: "$critic_score" }
     }
   },
   {
     $project: {
-      publisher_name:  "$_id",
-      total_titles:    1,
-      platform_count:  { $size: "$platforms" },
-      platforms:       1,
-      avg_price:       { $round: ["$avg_price",  2] },
-      avg_critic:      { $round: ["$avg_critic", 1] },
+      publisher_name: "$_id",
+      total_titles: 1,
+      platform_count: { $size: "$platforms" },
+      platforms: 1,
+      avg_price: { $round: ["$avg_price", 2] },
+      avg_critic: { $round: ["$avg_critic", 1] },
       _id: 0
     }
   },
-  { $merge: { into: "publishers_metadata", whenMatched: "replace" } }
+  {
+    $merge: {
+      into: "publishers_metadata",
+      on: "publisher_name",
+      whenMatched: "replace",
+      whenNotMatched: "insert"
+    }
+  }
 ]);
 
-// Krok B: $lookup – spoj hry s metadaty vydavatele
+
+// Krok 3: propojení her s metadaty vydavatele pomocí $lookup
 db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
   {
     $match: {
       source_platform: "steam",
-      price: { $gt: 20 },
-      critic_score: { $gt: 70, $type: ["int","long","double"] }
+      price: { $gt: 20, $type: ["int", "long", "double"] },
+      positive_ratings: { $gt: 1000, $type: ["int", "long", "double"] }
     }
   },
   {
     $lookup: {
-      from:         "publishers_metadata",
-      localField:   "publisher",
+      from: "publishers_metadata",
+      localField: "publisher",
       foreignField: "publisher_name",
-      as:           "pub_stats"
+      as: "pub_stats"
     }
   },
   { $unwind: { path: "$pub_stats", preserveNullAndEmptyArrays: true } },
   {
     $project: {
       title: 1,
-      price: 1,
-      critic_score: 1,
       publisher: 1,
-      "pub_stats.total_titles":   1,
+      price: 1,
+      positive_ratings: 1,
+      "pub_stats.total_titles": 1,
       "pub_stats.platform_count": 1,
-      "pub_stats.avg_critic":     1,
-      score_vs_pub_avg: {
-        $round: [{ $subtract: ["$critic_score",
-                               { $ifNull: ["$pub_stats.avg_critic", 0] }] }, 1]
+      "pub_stats.avg_price": 1,
+      price_vs_pub_avg: {
+        $round: [
+          {
+            $subtract: [
+              "$price",
+              { $ifNull: ["$pub_stats.avg_price", 0] }
+            ]
+          },
+          2
+        ]
       },
       _id: 0
     }
   },
-  { $sort: { score_vs_pub_avg: -1 } },
+  { $sort: { price_vs_pub_avg: -1 } },
   { $limit: 15 }
 ]);
 
@@ -445,7 +547,6 @@ db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
 db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
   {
     $match: {
-      source_platform: "steam",
       title: { $ne: null }
     }
   },
@@ -455,47 +556,50 @@ db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
     }
   },
   {
-    $lookup: {
-      from: "games_unified_validated",
-      let:  { norm: "$title_norm", orig_platform: "$source_platform" },
-      pipeline: [
-        {
-          $addFields: {
-            title_norm: { $toLower: { $trim: { input: "$title" } } }
-          }
-        },
-        {
-          $match: {
-            $expr: {
-              $and: [
-                { $eq:  ["$title_norm", "$$norm"] },
-                { $ne:  ["$source_platform", "$$orig_platform"] }
-              ]
-            }
-          }
-        },
-        {
-          $project: {
-            source_platform: 1,
-            critic_score: 1,
-            user_score: 1,
-            price: 1,
-            _id: 0
-          }
+    $group: {
+      _id: "$title_norm",
+      titles: { $addToSet: "$title" },
+      platforms: { $addToSet: "$source_platform" },
+      entries: {
+        $push: {
+          source_platform: "$source_platform",
+          critic_score: "$critic_score",
+          user_score: "$user_score",
+          price: "$price",
+          title: "$title"
         }
-      ],
-      as: "other_platforms"
+      }
     }
   },
-  { $match: { "other_platforms.0": { $exists: true } } },
+  {
+    $match: {
+      platforms: { $all: ["steam"] },
+      $expr: { $gt: [{ $size: "$platforms" }, 1] }
+    }
+  },
   {
     $project: {
-      title: 1,
-      steam_critic: "$critic_score",
-      steam_price:  "$price",
-      other_platforms: 1,
-      platform_count: { $add: [1, { $size: "$other_platforms" }] },
+      title: { $arrayElemAt: ["$titles", 0] },
+      platform_count: { $size: "$platforms" },
+      entries: {
+        $filter: {
+          input: "$entries",
+          as: "e",
+          cond: {
+            $or: [
+              { $ne: ["$$e.price", null] },
+              { $ne: ["$$e.critic_score", null] },
+              { $ne: ["$$e.user_score", null] }
+            ]
+          }
+        }
+      },
       _id: 0
+    }
+  },
+  {
+    $match: {
+      "entries.1": { $exists: true }
     }
   },
   { $sort: { platform_count: -1 } },
@@ -555,21 +659,27 @@ if (!colUUID) {
 }
 
 
-// --- Dotaz 10: $unionWith – srovnání Steam vs Nintendo cenových strategií ---
-// Zadání: Porovnej distribuci cen Steam a Nintendo her v jednom výstupu.
-// Spoj data obou platforem a zobraz srovnávací statistiky po cenových pásmech.
+// --- Dotaz 10: $unionWith – srovnání levných vs drahých her ---
+// Zadání: Porovnej levné a drahé Steam hry podle ceny,
+// počtu titulů a průměrného počtu pozitivních hodnocení.
 //
-// Obecně: $unionWith spojí výsledky dvou pipeline do jednoho proudu
-// dokumentů (podobně jako SQL UNION ALL). Umožňuje kombinovat data
-// z různých filtrů nebo kolekcí. $bucket pak rozdělí spojená data
-// do cenových pásem a $group podle platformy + pásma je porovná.
-// Konkrétně: Ukazuje, zda Nintendo hry jsou průměrně dražší než Steam.
+// Obecně: $unionWith spojí dva různé podvýběry stejné kolekce
+// do jednoho proudu dokumentů. Každému podvýběru je přiřazen
+// štítek price_group a následně se pomocí $group vypočítají
+// souhrnné statistiky pro levné a drahé hry.
+//
+// Konkrétně: Výsledek ukazuje, zda dražší Steam hry mají
+// více pozitivních hodnocení než levné hry.
 db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
   {
     $match: {
       source_platform: "steam",
-      price: { $gt: 0, $type: ["double","int","long"] }
+      price: { $gt: 0, $lte: 10, $type: ["int", "long", "double"] },
+      positive_ratings: { $gt: 0, $type: ["int", "long", "double"] }
     }
+  },
+  {
+    $addFields: { price_group: "cheap" }
   },
   {
     $unionWith: {
@@ -577,93 +687,110 @@ db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
       pipeline: [
         {
           $match: {
-            source_platform: "nintendo",
-            price: { $gt: 0, $type: ["double","int","long"] }
+            source_platform: "steam",
+            price: { $gt: 30, $type: ["int", "long", "double"] },
+            positive_ratings: { $gt: 0, $type: ["int", "long", "double"] }
           }
+        },
+        {
+          $addFields: { price_group: "expensive" }
         }
       ]
     }
   },
   {
-    $bucket: {
-      groupBy: "$price",
-      boundaries: [0, 5, 15, 30, 60, 100],
-      default: "100+",
-      output: {
-        count:        { $sum: 1 },
-        avg_critic:   { $avg: "$critic_score" },
-        platforms:    { $push: "$source_platform" }
-      }
+    $group: {
+      _id: "$price_group",
+      total_games: { $sum: 1 },
+      avg_price: { $avg: "$price" },
+      avg_positive_ratings: { $avg: "$positive_ratings" }
     }
   },
   {
     $project: {
-      price_range:  "$_id",
-      total_games:  "$count",
-      avg_critic:   { $round: ["$avg_critic", 1] },
-      steam_count: {
-        $size: { $filter: { input: "$platforms",
-                            cond: { $eq: ["$$this", "steam"] } } }
-      },
-      nintendo_count: {
-        $size: { $filter: { input: "$platforms",
-                            cond: { $eq: ["$$this", "nintendo"] } } }
-      },
+      price_group: "$_id",
+      total_games: 1,
+      avg_price: { $round: ["$avg_price", 2] },
+      avg_positive_ratings: { $round: ["$avg_positive_ratings", 0] },
       _id: 0
     }
   }
 ]);
 
 
-// --- Dotaz 11: $lookup s pipeline – top hry vydavatele a jeho průměr ---
-// Zadání: Pro top 10 vydavatelů (podle počtu her) zobraz jejich nejlépe
-// hodnocenou hru a porovnej ji s průměrem vydavatele.
+// --- Dotaz 11: $lookup s pipeline – top hra vydavatele a průměr portfolia ---
+// Zadání: Pro top vydavatele podle počtu her zobraz jejich nejlépe
+// hodnocenou hru a porovnej ji s průměrným hodnocením vydavatele.
 //
-// Obecně: $lookup s vnořenou pipeline umožňuje provést komplexní
-// dotaz na spojovanou kolekci (filtrování, řazení, limit uvnitř lookup).
-// Kombinace s $mergeObjects pak sloučí data z obou stran joinu.
-// Konkrétně: Pro každého vydavatele je vidět, zda jeho "hit" výrazně
-// překonává průměr portfolia (= publisher má jednu skvělou a jinak průměrné hry).
+// Obecně: Nejprve se pomocí $group spočítá počet her a průměrné
+// hodnocení kritiků pro každého vydavatele. Poté se pomocí $lookup
+// s vnořenou pipeline dohledá nejlépe hodnocená hra daného vydavatele.
+// Výsledný $project vypočítá rozdíl mezi nejlepším titulem a průměrem
+// jeho portfolia.
+//
+// Konkrétně: Dotaz ukazuje, zda má vydavatel vyrovnané portfolio,
+// nebo zda jeho nejlepší hra výrazně převyšuje běžnou úroveň ostatních titulů.
 db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
   { $match: { publisher: { $ne: null } } },
   {
     $group: {
-      _id:        "$publisher",
+      _id: "$publisher",
       game_count: { $sum: 1 },
-      avg_critic: { $avg: "$critic_score" }
+      avg_critic: { $avg: "$critic_score" },
+      rated_games: {
+        $sum: {
+          $cond: [
+            { $in: [{ $type: "$critic_score" }, ["int", "long", "double"]] },
+            1,
+            0
+          ]
+        }
+      }
     }
   },
+  { $match: { rated_games: { $gt: 0 } } },
   { $sort: { game_count: -1 } },
   { $limit: 10 },
   {
     $lookup: {
       from: "games_unified_validated",
-      let:  { pub: "$_id" },
+      let: { pub: "$_id" },
       pipeline: [
-        { $match: { $expr: { $eq: ["$publisher", "$$pub"] },
-                    critic_score: { $type: ["int","long","double"] } } },
-        { $sort:  { critic_score: -1 } },
+        {
+          $match: {
+            $expr: { $eq: ["$publisher", "$$pub"] },
+            critic_score: { $type: ["int", "long", "double"] }
+          }
+        },
+        { $sort: { critic_score: -1 } },
         { $limit: 1 },
-        { $project: { title: 1, critic_score: 1,
-                      source_platform: 1, _id: 0 } }
+        {
+          $project: {
+            title: 1,
+            critic_score: 1,
+            source_platform: 1,
+            _id: 0
+          }
+        }
       ],
       as: "best_game"
     }
   },
-  { $unwind: { path: "$best_game", preserveNullAndEmptyArrays: true } },
+  { $unwind: "$best_game" },
   {
     $project: {
-      publisher:       "$_id",
-      game_count:      1,
-      avg_critic:      { $round: ["$avg_critic", 1] },
-      best_title:      "$best_game.title",
-      best_score:      "$best_game.critic_score",
-      best_platform:   "$best_game.source_platform",
+      publisher: "$_id",
+      game_count: 1,
+      rated_games: 1,
+      avg_critic: { $round: ["$avg_critic", 1] },
+      best_title: "$best_game.title",
+      best_score: "$best_game.critic_score",
+      best_platform: "$best_game.source_platform",
       score_above_avg: {
-        $round: [{ $subtract: [
-          { $ifNull: ["$best_game.critic_score", 0] },
-          { $ifNull: ["$avg_critic", 0] }
-        ]}, 1]
+        $round: [
+          { $subtract: ["$best_game.critic_score", "$avg_critic"] },
+          1
+        ]
       },
       _id: 0
     }
@@ -672,61 +799,110 @@ db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
 ]);
 
 
-// --- Dotaz 12: Obohacení her o tag kvality pomocí $lookup na publishers_metadata ---
-// Zadání: Označ každou hru jako "flagship" pokud jde o nejlépe hodnocenou
-// hru svého vydavatele a zároveň vydavatel působí na 2+ platformách.
+// --- Dotaz 12: Flagship tituly vydavatelů napříč platformami ---
+// Zadání: Najdi nejlépe hodnocené hry každého vydavatele a označ
+// je jako "flagship", pokud vydavatel působí alespoň na dvou platformách.
 //
-// Obecně: Kombinuje $lookup (pro data vydavatele), $addFields s $cond
-// pro podmíněné přiřazení tagu a $match pro filtraci. $project s
-// $arrayElemAt přistupuje k prvnímu prvku výsledku lookup.
-// Konkrétně: Výsledkem je seznam "flagship" titulů – her, které jsou
-// vrcholem portfolia svého multi-platformního vydavatele.
+// Obecně: V první části se pro každého vydavatele spočítá počet titulů
+// a počet platforem ze všech jeho her. Současně se určí maximální
+// hodnocení kritiků pouze z těch her, které critic_score skutečně mají.
+// Výsledek se uloží do pomocné kolekce publisher_flagship_stats.
+// Ve druhé části se tato pomocná kolekce propojí s hlavní kolekcí her
+// a ponechají se pouze hry, které dosahují maximálního hodnocení
+// svého vydavatele.
+//
+// Konkrétně: Výsledkem je seznam flagship titulů, tedy her, které jsou
+// vrcholem portfolia vydavatelů působících na více platformách.
+
+
+// Krok 0: smaž starou pomocnou kolekci
+db.getSiblingDB("gamesdb").publisher_flagship_stats.drop();
+
+
+// Krok 1: vytvoř statistiky vydavatelů správně
 db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
   {
     $match: {
-      critic_score: { $gte: 85, $type: ["int","long","double"] },
-      publisher:    { $ne: null }
+      publisher: { $ne: null }
     }
   },
   {
-    $lookup: {
-      from:         "publishers_metadata",
-      localField:   "publisher",
-      foreignField: "publisher_name",
-      as:           "pub_meta"
-    }
-  },
-  {
-    $addFields: {
-      pub_meta:       { $arrayElemAt: ["$pub_meta", 0] },
-      is_flagship: {
-        $cond: {
-          if: {
-            $and: [
-              { $gte: ["$critic_score",
-                       { $ifNull: [{ $arrayElemAt: ["$pub_meta.avg_critic", 0] }, 0] }] },
-              { $gte: [{ $ifNull: [{ $arrayElemAt: ["$pub_meta.platform_count", 0] }, 0] }, 2] }
-            ]
-          },
-          then: "flagship",
-          else: "standard"
+    $group: {
+      _id: "$publisher",
+      total_titles: { $sum: 1 },
+      platforms: { $addToSet: "$source_platform" },
+      max_critic: {
+        $max: {
+          $cond: [
+            { $in: [{ $type: "$critic_score" }, ["int", "long", "double"]] },
+            "$critic_score",
+            null
+          ]
         }
       }
     }
   },
-  { $match: { is_flagship: "flagship" } },
   {
     $project: {
-      title: 1, source_platform: 1,
-      critic_score: 1, publisher: 1,
-      pub_total_titles:   "$pub_meta.total_titles",
-      pub_platform_count: "$pub_meta.platform_count",
-      pub_avg_critic:     "$pub_meta.avg_critic",
-      is_flagship: 1,
+      publisher_name: "$_id",
+      total_titles: 1,
+      platform_count: { $size: "$platforms" },
+      max_critic: 1,
       _id: 0
     }
   },
-  { $sort: { critic_score: -1 } },
+  {
+    $match: {
+      max_critic: { $type: ["int", "long", "double"] }
+    }
+  },
+  {
+    $merge: {
+      into: "publisher_flagship_stats",
+      whenMatched: "replace",
+      whenNotMatched: "insert"
+    }
+  }
+]);
+
+
+// Krok 2: najdi skutečné flagship hry
+db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
+  {
+    $match: {
+      publisher: { $ne: null },
+      critic_score: { $type: ["int", "long", "double"] }
+    }
+  },
+  {
+    $lookup: {
+      from: "publisher_flagship_stats",
+      localField: "publisher",
+      foreignField: "publisher_name",
+      as: "pub_meta"
+    }
+  },
+  { $unwind: "$pub_meta" },
+  {
+    $match: {
+      "pub_meta.platform_count": { $gte: 2 },
+      $expr: { $eq: ["$critic_score", "$pub_meta.max_critic"] }
+    }
+  },
+  {
+    $project: {
+      title: 1,
+      source_platform: 1,
+      critic_score: 1,
+      publisher: 1,
+      pub_total_titles: "$pub_meta.total_titles",
+      pub_platform_count: "$pub_meta.platform_count",
+      pub_max_critic: "$pub_meta.max_critic",
+      is_flagship: "flagship",
+      _id: 0
+    }
+  },
+  { $sort: { critic_score: -1, pub_total_titles: -1 } },
   { $limit: 20 }
 ]);
 
@@ -735,34 +911,55 @@ db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
 // KATEGORIE 3: TRANSFORMACE A OBOHACENÍ DAT
 // ==============================================================
 
-// --- Dotaz 13: Klasifikace her do tiers pomocí $switch + $addFields ---
-// Zadání: Přiřaď každé hře kategorii kvality (AAA/AA/Indie/Unknown)
-// na základě ceny a hodnocení, a cenový tier (Premium/Standard/Budget/Free).
-// Vytvoř derivovanou kolekci pro rychlé filtrování.
+// --- Dotaz 13: Klasifikace her do quality tiers a price tiers pomocí $switch ---
+// Zadání: Přiřaď každé hře kategorii kvality podle hodnocení kritiků
+// a samostatný cenový tier podle ceny. Následně zobraz souhrnnou
+// statistiku těchto kombinací.
 //
-// Obecně: $addFields přidává nová pole bez změny existujících.
-// $switch je vícehodnotový podmíněný výraz (jako switch/case).
-// $merge zapíše transformovaná data do nové kolekce – vytváří
-// materializovaný pohled pro rychlejší dotazování.
-// Konkrétně: Výsledná kolekce games_tiered umožní filtrovat hry
-// bez opakovaného výpočtu klasifikace.
+// Obecně: $addFields přidává odvozená pole quality_tier a price_tier.
+// $switch slouží k vícevětvovému podmíněnému rozhodování. Hodnocení
+// a cena jsou klasifikovány odděleně, takže dotaz není závislý
+// na současné přítomnosti obou polí v každém dokumentu. Následný
+// $group agreguje hry podle kombinace obou tierů a vypočítá jejich
+// počet, průměrnou cenu, průměrné hodnocení a zastoupené platformy.
+//
+// Konkrétně: Výsledek ukazuje, jak jsou hry rozloženy mezi kvalitativní
+// a cenové kategorie a na kterých platformách se tyto kombinace
+// vyskytují nejčastěji.
+
 db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
   {
     $addFields: {
       quality_tier: {
         $switch: {
           branches: [
-            { case: { $and: [{ $gte: ["$critic_score", 85] },
-                             { $gte: ["$price", 40] }] },
-              then: "AAA" },
-            { case: { $and: [{ $gte: ["$critic_score", 75] },
-                             { $gte: ["$price", 20] }] },
-              then: "AA" },
-            { case: { $and: [{ $gte: ["$critic_score", 60] },
-                             { $lt:  ["$price", 20] }] },
-              then: "Indie" },
-            { case: { $eq: ["$price", 0] },
-              then: "Free-to-Play" }
+            {
+              case: {
+                $and: [
+                  { $in: [{ $type: "$critic_score" }, ["int", "long", "double"]] },
+                  { $gte: ["$critic_score", 8.5] }
+                ]
+              },
+              then: "Excellent"
+            },
+            {
+              case: {
+                $and: [
+                  { $in: [{ $type: "$critic_score" }, ["int", "long", "double"]] },
+                  { $gte: ["$critic_score", 7.5] }
+                ]
+              },
+              then: "Strong"
+            },
+            {
+              case: {
+                $and: [
+                  { $in: [{ $type: "$critic_score" }, ["int", "long", "double"]] },
+                  { $gte: ["$critic_score", 6.0] }
+                ]
+              },
+              then: "Average"
+            }
           ],
           default: "Unknown"
         }
@@ -770,10 +967,42 @@ db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
       price_tier: {
         $switch: {
           branches: [
-            { case: { $eq:  ["$price", 0] },      then: "Free" },
-            { case: { $lte: ["$price", 9.99] },   then: "Budget" },
-            { case: { $lte: ["$price", 29.99] },  then: "Standard" },
-            { case: { $lte: ["$price", 59.99] },  then: "Premium" }
+            {
+              case: {
+                $and: [
+                  { $in: [{ $type: "$price" }, ["int", "long", "double"]] },
+                  { $eq: ["$price", 0] }
+                ]
+              },
+              then: "Free"
+            },
+            {
+              case: {
+                $and: [
+                  { $in: [{ $type: "$price" }, ["int", "long", "double"]] },
+                  { $lte: ["$price", 9.99] }
+                ]
+              },
+              then: "Budget"
+            },
+            {
+              case: {
+                $and: [
+                  { $in: [{ $type: "$price" }, ["int", "long", "double"]] },
+                  { $lte: ["$price", 29.99] }
+                ]
+              },
+              then: "Standard"
+            },
+            {
+              case: {
+                $and: [
+                  { $in: [{ $type: "$price" }, ["int", "long", "double"]] },
+                  { $lte: ["$price", 59.99] }
+                ]
+              },
+              then: "Premium"
+            }
           ],
           default: "Luxury"
         }
@@ -782,22 +1011,25 @@ db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
   },
   {
     $group: {
-      _id: { quality: "$quality_tier", price: "$price_tier" },
-      count:       { $sum: 1 },
-      avg_critic:  { $avg: "$critic_score" },
-      avg_price:   { $avg: "$price" },
-      platforms:   { $addToSet: "$source_platform" }
+      _id: {
+        quality: "$quality_tier",
+        price: "$price_tier"
+      },
+      game_count: { $sum: 1 },
+      avg_critic: { $avg: "$critic_score" },
+      avg_price: { $avg: "$price" },
+      platforms: { $addToSet: "$source_platform" }
     }
   },
   { $sort: { "_id.quality": 1, "_id.price": 1 } },
   {
     $project: {
-      quality_tier:  "$_id.quality",
-      price_tier:    "$_id.price",
-      game_count:    "$count",
-      avg_critic:    { $round: ["$avg_critic", 1] },
-      avg_price:     { $round: ["$avg_price",  2] },
-      platforms:     1,
+      quality_tier: "$_id.quality",
+      price_tier: "$_id.price",
+      game_count: 1,
+      avg_critic: { $round: ["$avg_critic", 1] },
+      avg_price: { $round: ["$avg_price", 2] },
+      platforms: 1,
       _id: 0
     }
   }
@@ -926,31 +1158,37 @@ db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
 ]);
 
 
-// --- Dotaz 16: $reduce – výpočet délky seznamu žánrů a genre score ---
-// Zadání: Pro každou hru vypočítej "žánrovou šíři" (počet žánrů × průměrný
-// critic_score) a najdi hry s nejlepším poměrem šíře žánrů ku hodnocení.
+// --- Dotaz 16: $reduce – sloučení features do řetězce a feature richness score ---
+// Zadání: Pro každou Steam hru spoj seznam features do jednoho řetězce
+// a vypočítej odvozené skóre jako počet features × počet pozitivních hodnocení.
+// Následně zobraz hry s nejvyšší hodnotou tohoto ukazatele.
 //
-// Obecně: $reduce iteruje přes pole a akumuluje hodnotu (fold/reduce).
-// Zde počítá délku žánrového pole alternativním způsobem a concatenuje
-// žánry do řetězce. Kombinace s $multiply a $ifNull ukazuje komplexní
-// odvozené pole v $project pipeline stage.
-// Konkrétně: Hry s mnoha žánry a vysokým hodnocením jsou nejuniverzálnější.
+// Obecně: $reduce iteruje přes pole features a postupně z něj skládá
+// textový řetězec. $size určuje počet features a $multiply následně
+// kombinuje počet features s positive_ratings do odvozeného ukazatele
+// feature_richness_score. Výsledkem je transformovaný pohled na hry,
+// které mají bohatou sadu funkcí a zároveň silnou uživatelskou odezvu.
+//
+// Konkrétně: Dotaz vyhledává Steam hry, které kombinují větší počet
+// funkcí s vyšším počtem pozitivních hodnocení.
+
 db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
   {
     $match: {
-      genre:        { $type: "array", $ne: [] },
-      critic_score: { $gt: 70, $type: ["int","long","double"] }
+      source_platform: "steam",
+      features: { $type: "array", $ne: [] },
+      positive_ratings: { $gt: 0, $type: ["int", "long", "double"] }
     }
   },
   {
     $project: {
-      title:        1,
-      source_platform: 1,
-      critic_score: 1,
-      genre_count:  { $size: "$genre" },
-      genre_string: {
+      title: 1,
+      publisher: 1,
+      positive_ratings: 1,
+      feature_count: { $size: "$features" },
+      features_string: {
         $reduce: {
-          input:        "$genre",
+          input: "$features",
           initialValue: "",
           in: {
             $cond: [
@@ -961,27 +1199,29 @@ db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
           }
         }
       },
-      genre_breadth_score: {
+      feature_richness_score: {
         $round: [
-          { $multiply: [
-            { $size: "$genre" },
-            "$critic_score"
-          ]},
+          {
+            $multiply: [
+              { $size: "$features" },
+              "$positive_ratings"
+            ]
+          },
           0
         ]
       }
     }
   },
-  { $sort: { genre_breadth_score: -1 } },
+  { $sort: { feature_richness_score: -1 } },
   { $limit: 15 },
   {
     $project: {
       title: 1,
-      source_platform: 1,
-      critic_score: 1,
-      genre_count: 1,
-      genre_string: 1,
-      genre_breadth_score: 1,
+      publisher: 1,
+      positive_ratings: 1,
+      feature_count: 1,
+      features_string: 1,
+      feature_richness_score: 1,
       _id: 0
     }
   }
@@ -992,51 +1232,75 @@ db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
 // Zadání: Materializuj výsledek komplexní pipeline do samostatné kolekce
 // steam_top_rated pro rychlý reporting bez opakovaného výpočtu.
 //
-// Obecně: $out zapíše celý výsledek pipeline do nové (nebo přepsané)
-// kolekce. Na rozdíl od $merge (upsert) $out kolekci atomicky nahradí.
-// Vhodné pro nočně obnovované reportovací pohledy (materialized views).
-// Konkrétně: Kolekce steam_top_rated bude obsahovat jen Steam hry
-// s hodnocením ≥ 80, obohacené o approval_ratio a quality_tier.
+// Obecně: $out zapíše celý výsledek pipeline do nové nebo přepsané
+// kolekce. Pipeline vybírá populární Steam hry a obohacuje je
+// o odvozená pole total_ratings, approval_ratio a quality_tier.
+//
+// Konkrétně: Kolekce steam_top_rated bude obsahovat Steam hry
+// s vyšším počtem pozitivních hodnocení, doplněné o reportingové metriky.
+
 db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
   {
     $match: {
-      source_platform:  "steam",
-      critic_score:     { $gte: 80, $type: ["int","long","double"] },
-      positive_ratings: { $gt: 100 }
+      source_platform: "steam",
+      positive_ratings: { $gt: 100, $type: ["int", "long", "double"] }
     }
   },
   {
     $addFields: {
-      total_ratings:  { $add: ["$positive_ratings", "$negative_ratings"] },
+      total_ratings: {
+        $add: [
+          "$positive_ratings",
+          { $ifNull: ["$negative_ratings", 0] }
+        ]
+      },
       approval_ratio: {
         $round: [
-          { $multiply: [
-            { $divide: ["$positive_ratings",
-                         { $add: ["$positive_ratings",
-                                  { $ifNull: ["$negative_ratings", 1] }] }] },
-            100
-          ]},
+          {
+            $multiply: [
+              {
+                $divide: [
+                  "$positive_ratings",
+                  {
+                    $add: [
+                      "$positive_ratings",
+                      { $ifNull: ["$negative_ratings", 0] }
+                    ]
+                  }
+                ]
+              },
+              100
+            ]
+          },
           1
         ]
       },
       quality_tier: {
         $switch: {
           branches: [
-            { case: { $gte: ["$critic_score", 90] }, then: "Masterpiece" },
-            { case: { $gte: ["$critic_score", 85] }, then: "Excellent" },
-            { case: { $gte: ["$critic_score", 80] }, then: "Great" }
+            { case: { $gte: ["$positive_ratings", 50000] }, then: "Hit" },
+            { case: { $gte: ["$positive_ratings", 10000] }, then: "Popular" },
+            { case: { $gte: ["$positive_ratings", 1000] }, then: "Known" }
           ],
-          default: "Good"
+          default: "Niche"
         }
       }
     }
   },
-  { $sort: { critic_score: -1 } },
+  { $sort: { positive_ratings: -1 } },
   {
     $project: {
-      title: 1, publisher: 1, release_year: 1,
-      price: 1, critic_score: 1, approval_ratio: 1,
-      total_ratings: 1, quality_tier: 1, genre: 1
+      title: 1,
+      publisher: 1,
+      release_year: 1,
+      price: 1,
+      positive_ratings: 1,
+      negative_ratings: 1,
+      total_ratings: 1,
+      approval_ratio: 1,
+      quality_tier: 1,
+      genre: 1,
+      _id: 0
     }
   },
   { $out: "steam_top_rated" }
@@ -1044,24 +1308,37 @@ db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
 
 // Ověření výsledku:
 db.getSiblingDB("gamesdb").steam_top_rated.aggregate([
-  { $group: { _id: "$quality_tier", count: { $sum: 1 }, avg_critic: { $avg: "$critic_score" } } },
-  { $sort:  { avg_critic: -1 } }
+  {
+    $group: {
+      _id: "$quality_tier",
+      count: { $sum: 1 },
+      avg_approval: { $avg: "$approval_ratio" }
+    }
+  },
+  { $sort: { count: -1 } }
 ]);
 
 
-// --- Dotaz 18: Aktualizace dokumentů v pipeline – $merge s whenMatched ---
-// Zadání: Přidej každé hře v kolekci pole popularity_rank (pořadí
-// dle total_ratings v rámci platformy) pomocí pipeline a $merge.
+// --- Dotaz 18: $setWindowFields + $merge – vytvoření kolekce s popularity_rank ---
+// Zadání: Vytvoř odvozenou kolekci, ve které bude mít každá hra
+// pole popularity_rank (pořadí dle positive_ratings v rámci platformy)
+// a platform_total (celkový počet hodnocených her na dané platformě).
 //
-// Obecně: $setWindowFields s $rank() přiřadí pořadí v rámci partitions
-// (zde: platforma). $merge s whenMatched: "merge" pak aktualizuje
-// existující dokumenty polem rank bez přepisování ostatních polí.
-// Konkrétně: Steam hra s nejvíce hodnoceními dostane rank=1,
-// nintendo hra s nejvíce hodnoceními dostane také rank=1 (samostatné pořadí).
+// Obecně: $setWindowFields s funkcí $rank() přiřadí pořadí v rámci
+// jednotlivých partitions, zde podle source_platform. Současně se
+// pomocí okenní agregace dopočítá pole platform_total. Výsledek se
+// následně uloží pomocí $merge do nové kolekce, aby nebylo nutné
+// přímo aktualizovat shardovanou zdrojovou kolekci.
+//
+// Konkrétně: Steam hra s nejvíce pozitivními hodnoceními dostane
+// popularity_rank = 1, stejně tak nejvýše hodnocená Nintendo hra.
+// Pořadí se počítá samostatně pro každou platformu.
+
 db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
   {
     $match: {
-      positive_ratings: { $type: ["int","long","double"], $gt: 0 }
+      positive_ratings: { $type: ["int", "long", "double"], $gt: 0 },
+      source_platform: { $exists: true, $ne: null }
     }
   },
   {
@@ -1070,33 +1347,32 @@ db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
       sortBy: { positive_ratings: -1 },
       output: {
         popularity_rank: { $rank: {} },
-        platform_total:  {
+        platform_total: {
           $sum: { $literal: 1 },
-          window: { documents: ["unbounded","unbounded"] }
+          window: { documents: ["unbounded", "unbounded"] }
         }
       }
     }
   },
   {
-    $project: {
-      popularity_rank: 1,
-      platform_total:  1
-    }
-  },
-  {
     $merge: {
-      into:         "games_unified_validated",
-      whenMatched:  "merge",
-      whenNotMatched: "discard"
+      into: "games_ranked_by_popularity",
+      whenMatched: "replace",
+      whenNotMatched: "insert"
     }
   }
 ]);
 
-// Ověření:
-db.getSiblingDB("gamesdb").games_unified_validated.find(
+// Ověření výsledku:
+db.getSiblingDB("gamesdb").games_ranked_by_popularity.find(
   { popularity_rank: { $lte: 3 } },
-  { title: 1, source_platform: 1, popularity_rank: 1,
-    positive_ratings: 1, platform_total: 1 }
+  {
+    title: 1,
+    source_platform: 1,
+    popularity_rank: 1,
+    positive_ratings: 1,
+    platform_total: 1
+  }
 ).sort({ source_platform: 1, popularity_rank: 1 });
 
 
@@ -1104,29 +1380,146 @@ db.getSiblingDB("gamesdb").games_unified_validated.find(
 // KATEGORIE 4: DISTRIBUCE DAT, CLUSTER, REPLIKACE A VÝPADEK
 // ==============================================================
 
-// --- Dotaz 19: Detailní přehled shardů a vyvážení dat ---
-// Zadání: Zobraz aktuální stav shardovaného clusteru – seznam shardů,
-// počty chunků, hostitelé a zda je balancer aktivní.
+// --- Dotaz 19: Agregovaný přehled shardů, chunků a shard key hranic ---
+// Zadání: Zobraz aktuální stav shardovaného clusteru pro kolekci
+// gamesdb.games_unified_validated – pro každý shard zjisti počet chunků,
+// hostitele a ukázkové hranice shard key.
 //
-// Obecně: sh.status() je příkaz mongos routeru agregující informace
-// z config databáze o všech shardech, chunkcích a kolekcích.
-// Vrací: seznam shardů (shard1RS, shard2RS, shard3RS) s hostiteli,
-// konfiguraci balanceru, seznam shardovaných kolekcí a shard key.
-// Konkrétně: Ověřujeme že kolekce gamesdb.games_unified_validated
-// je shardována podle klíče {source_platform:1, source_id:1}.
-sh.status();
+// Obecně: Dotaz pracuje nad systémovými kolekcemi config.collections,
+// config.chunks a config.shards. Nejprve získá UUID shardované kolekce,
+// poté agreguje chunky podle shardu, přes $lookup doplní informace
+// o hostitelích a v závěru zobrazí přehled distribuce chunků.
+// Oproti příkazu sh.status() jde o cílený analytický dotaz nad metadata
+// clusteru, který vrací strukturovaný výstup vhodný pro dokumentaci.
+//
+// Konkrétně: Výsledek ukazuje, na kterém shardu leží chunky kolekce
+// games_unified_validated, kolik jich každý shard drží a jaké jsou
+// ukázkové minimální a maximální hranice shard key.
+
+const colMeta = db.getSiblingDB("config").collections.findOne({
+  _id: "gamesdb.games_unified_validated"
+});
+
+const colUUID = colMeta ? colMeta.uuid : null;
+
+if (!colUUID) {
+  print("Kolekce gamesdb.games_unified_validated nebyla nalezena nebo není shardována.");
+} else {
+  db.getSiblingDB("config").chunks.aggregate([
+    {
+      $match: { uuid: colUUID }
+    },
+    {
+      $group: {
+        _id: "$shard",
+        chunk_count: { $sum: 1 },
+        min_keys: { $push: "$min" },
+        max_keys: { $push: "$max" }
+      }
+    },
+    {
+      $lookup: {
+        from: "shards",
+        localField: "_id",
+        foreignField: "_id",
+        as: "shard_info"
+      }
+    },
+    { $unwind: "$shard_info" },
+    {
+      $project: {
+        shard: "$_id",
+        chunk_count: 1,
+        host: "$shard_info.host",
+        sample_min_keys: { $slice: ["$min_keys", 2] },
+        sample_max_keys: { $slice: ["$max_keys", 2] },
+        _id: 0
+      }
+    },
+    { $sort: { shard: 1 } }
+  ]);
+}
 
 
-// --- Dotaz 20: Počet dokumentů na každém shardu (getShardDistribution) ---
-// Zadání: Kolik dokumentů a kolik % dat leží na každém ze tří shardů?
-// Je distribuce dat vyvážená nebo je jeden shard přetížen?
+// --- Dotaz 20: Skutečná distribuce dokumentů podle shard key domény ---
+// Zadání: Zjisti, kolik dokumentů a jaké procento dat připadá
+// na jednotlivé oblasti shard key, které byly rozděleny mezi tři shardy.
+// Ověř, zda je distribuce dat vyvážená, nebo zda je některá část
+// clusteru zatížena výrazně více.
 //
-// Obecně: getShardDistribution() vrací pro každý shard: počet dokumentů
-// (count), velikost dat (size), počet chunků a odhadovaný průměrný
-// počet dokumentů na chunk. Pomáhá identifikovat hot shards.
-// Konkrétně: Distribuce by měla být přibližně 1/3 na každý shard.
-// Nerovnoměrnost by indikovala nevhodnou volbu shard key.
-db.getSiblingDB("gamesdb").games_unified_validated.getShardDistribution();
+// Obecně: Dotaz pracuje nad hlavní kolekcí a agreguje dokumenty
+// podle source_platform, což v tomto řešení odpovídá hlavním oblastem
+// shard key a současně i rozdělení chunků mezi shardy. Pomocí $group
+// se spočítá počet dokumentů, pomocí druhého $group celkový součet
+// a následně se přes $project dopočítá procentuální podíl.
+// Výsledkem je skutečné datové rozdělení, nikoli pouze metadata chunků.
+//
+// Konkrétně: Dotaz ukazuje, že i když metadata chunků mohou být
+// rozdělena rovnoměrně, skutečný počet dokumentů mezi platformami
+// (a tedy i mezi shard key oblastmi) může být výrazně nerovnoměrný.
+
+db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
+  {
+    $group: {
+      _id: "$source_platform",
+      doc_count: { $sum: 1 },
+      rated_games: {
+        $sum: {
+          $cond: [
+            { $gt: [{ $ifNull: ["$positive_ratings", 0] }, 0] },
+            1,
+            0
+          ]
+        }
+      },
+      scored_games: {
+        $sum: {
+          $cond: [
+            { $gt: [{ $convert: { input: "$critic_score", to: "double", onError: 0, onNull: 0 } }, 0] },
+            1,
+            0
+          ]
+        }
+      }
+    }
+  },
+  {
+    $group: {
+      _id: null,
+      total_docs: { $sum: "$doc_count" },
+      rows: {
+        $push: {
+          platform: "$_id",
+          doc_count: "$doc_count",
+          rated_games: "$rated_games",
+          scored_games: "$scored_games"
+        }
+      }
+    }
+  },
+  { $unwind: "$rows" },
+  {
+    $project: {
+      platform: "$rows.platform",
+      doc_count: "$rows.doc_count",
+      rated_games: "$rows.rated_games",
+      scored_games: "$rows.scored_games",
+      pct_of_cluster: {
+        $round: [
+          {
+            $multiply: [
+              { $divide: ["$rows.doc_count", "$total_docs"] },
+              100
+            ]
+          },
+          1
+        ]
+      },
+      _id: 0
+    }
+  },
+  { $sort: { doc_count: -1 } }
+]);
 
 
 // --- Dotaz 21: Stav replica set shard1RS – PRIMARY a replication lag ---
@@ -1154,6 +1547,8 @@ db.getSiblingDB("gamesdb").games_unified_validated.getShardDistribution();
 //             '| lag_sec:', typeof lag === 'number' ? lag.toFixed(1) : lag);
 //     });
 //   "
+//docker exec -it s1a mongosh --port 27018 -u admin -p admin --authenticationDatabase admin
+
 const rsStatus = db.adminCommand({ replSetGetStatus: 1 });
 const primaryMember = rsStatus.members.find(m => m.state === 1);
 print("Replica set:", rsStatus.set, "| Celkem členů:", rsStatus.members.length);
@@ -1193,6 +1588,7 @@ rsStatus.members.forEach(m => {
 //       '| hidden:', m.hidden || false, '| arbiter:', m.arbiterOnly || false
 //     ));
 //   "
+//docker exec -it s1a mongosh --port 27018 -u admin -p admin --authenticationDatabase admin
 const rsConf = db.adminCommand({ replSetGetConfig: 1 }).config;
 print("Set:", rsConf._id, "| Protocol:", rsConf.protocolVersion);
 print("Election timeout ms:", rsConf.settings.electionTimeoutMillis);
@@ -1203,46 +1599,80 @@ rsConf.members.forEach(m => print(
 ));
 
 
-// --- Dotaz 23: Měření replication lag všech shardů z mongos ---
-// Zadání: Změř zpoždění replikace na všech secondary uzlech ve všech
-// třech shardech (shard1RS, shard2RS, shard3RS) z jednoho místa.
+// --- Dotaz 23: Analýza distribuce dat a kvality shard key ---
+// Zadání: Analyzuj rozložení dat podle shard key (source_platform)
+// a současně vyhodnoť kvalitu dat (ratings, critic_score).
 //
-// Obecně: serverStatus().repl vrací informace o replikaci dostupné
-// i přes mongos pro každý shard skrze db.adminCommand na příslušném
-// primárním uzlu. db.getSiblingDB("config").shards.find() vrátí seznam
-// shardů a jejich hostitelů. Kombinace obou přístupů dá přehled lagů
-// napříč celým clusterem bez nutnosti přihlašovat se na každý shard zvlášť.
-// Konkrétně: Pro dokumentaci spouštíme na s1a, s2a, s3a a porovnáváme
-// výsledky – lag by měl být < 1s v lokálním Docker prostředí.
+// Obecně: Dotaz využívá agregační pipeline, kde $group seskupuje
+// dokumenty podle shard key a počítá jejich počet. Pomocí $cond
+// a $sum se zároveň analyzuje kvalita dat (kolik dokumentů obsahuje
+// ratingy a critic_score). Výsledkem je komplexní přehled distribuce
+// dat a jejich úplnosti.
 //
-// Spuštění pro shard1RS (opakuj pro s2a, s3a):
-// docker exec s1a mongosh --port 27018 \
-//   -u admin -p admin --authenticationDatabase admin \
-//   --eval "
-//     const s = db.adminCommand({ replSetGetStatus: 1 });
-//     const primary = s.members.find(m => m.state === 1);
-//     const secondaries = s.members.filter(m => m.state === 2);
-//     print('=== Shard:', s.set, '===');
-//     print('PRIMARY:', primary.name, '| optime:', primary.optimeDate);
-//     secondaries.forEach(sec => {
-//       const lag = (primary.optimeDate - sec.optimeDate) / 1000;
-//       print('SECONDARY:', sec.name,
-//             '| syncedTo:', sec.optimeDate,
-//             '| lag_sec:', lag.toFixed(2));
-//     });
-//   "
+// Konkrétně: Dotaz ukazuje, zda jsou data rovnoměrně rozložena mezi
+// platformy (Steam, PlayStation, Nintendo) a jaká je kvalita dat
+// v jednotlivých shardech.
 
-// Přehled shardů dostupný přes config databázi:
-db.getSiblingDB("config").shards.aggregate([
+db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
+  {
+    $group: {
+      _id: "$source_platform",
+
+      total_docs: { $sum: 1 },
+
+      with_ratings: {
+        $sum: {
+          $cond: [
+            { $gt: ["$positive_ratings", 0] },
+            1,
+            0
+          ]
+        }
+      },
+
+      with_critic: {
+        $sum: {
+          $cond: [
+            { $gt: ["$critic_score", 0] },
+            1,
+            0
+          ]
+        }
+      }
+    }
+  },
+  {
+    $addFields: {
+      ratings_pct: {
+        $round: [
+          { $multiply: [
+            { $divide: ["$with_ratings", "$total_docs"] },
+            100
+          ]},
+          1
+        ]
+      },
+      critic_pct: {
+        $round: [
+          { $multiply: [
+            { $divide: ["$with_critic", "$total_docs"] },
+            100
+          ]},
+          1
+        ]
+      }
+    }
+  },
   {
     $project: {
-      shard_id:   "$_id",
-      host:       1,
-      state:      1,
+      platform: "$_id",
+      total_docs: 1,
+      ratings_pct: 1,
+      critic_pct: 1,
       _id: 0
     }
   },
-  { $sort: { shard_id: 1 } }
+  { $sort: { total_docs: -1 } }
 ]);
 
 
@@ -1321,15 +1751,16 @@ db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
 // ==============================================================
 
 // --- Dotaz 25: Audit kvality dat – detekce neúplných dokumentů ---
-// Zadání: Najdi dokumenty s chybějícími kritickými poli, zkontroluj
-// konzistenci datových typů a sumarizuj kvalitu dat po platformách.
+// Zadání: Najdi dokumenty s chybějícími nebo problematickými poli
+// a sumarizuj kvalitu dat po platformách.
 //
-// Obecně: $project s $type umožňuje kontrolu BSON typu pole.
-// $cond + $or detekuje null, missing nebo nesprávný typ.
-// Výsledný $group agreguje počty problematických záznamů.
-// Tato pipeline implementuje data quality check bez externích nástrojů.
-// Konkrétně: Ukazuje kolik % záznamů má null critic_score, kolik
-// má nesprávný typ source_id a kolik chybí release_year.
+// Obecně: $project s kombinací $cond a $or umožňuje detekovat
+// chybějící, nulové nebo logicky neplatné hodnoty. Následný $group
+// agreguje počty problematických záznamů po platformách a $project
+// převádí výsledky na procentuální ukazatele kvality dat.
+//
+// Konkrétně: Výsledek ukazuje, kolik procent záznamů má chybějící
+// critic_score, price, release_year nebo genre v jednotlivých zdrojích.
 db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
   {
     $project: {
@@ -1423,69 +1854,98 @@ db.getSiblingDB("gamesdb").runCommand({
 }).cursor.firstBatch[0].options.validator;
 
 
-// --- Dotaz 27: explain() – srovnání IXSCAN vs COLLSCAN ---
-// Zadání: Porovnej plány dotazu pro filtrování podle release_year:
-// jednou bez indexu (COLLSCAN), jednou s indexem (IXSCAN).
-// Změř rozdíl v počtu prohlédnutých dokumentů.
+// --- Dotaz 27: explain() – srovnání indexovaného dotazu a COLLSCAN ---
+// Zadání: Porovnej plán vykonání dotazu nad polem release_year
+// pro existující hodnotu v datech Steam her. Změř rozdíl mezi
+// indexovaným přístupem a vynuceným full scanem.
 //
-// Obecně: explain("executionStats") zobrazuje detailní plán vykonání:
-// - COLLSCAN: prochází celou kolekci (totalDocsExamined = vše)
-// - IXSCAN: prochází jen odpovídající záznamy v indexu
-// Klíčové metriky: totalDocsExamined, totalKeysExamined, executionTimeMillis.
-// Konkrétně: Index na release_year byl vytvořen v init-db.js,
-// dotaz by měl použít IXSCAN a prohlédnout jen ~2000 dokumentů.
+// Obecně: explain("executionStats") vrací detailní plán dotazu
+// včetně počtu prohlédnutých dokumentů, indexových klíčů a času.
+// V prostředí mongos může být vrchní plán označen jako SINGLE_SHARD,
+// ale klíčové jsou executionStats. Vynucený hint({ $natural: 1 })
+// simuluje COLLSCAN bez použití indexu.
+//
+// Konkrétně: Dotaz ukazuje, že při vhodném indexu databáze prohlíží
+// výrazně méně dokumentů než při full scan přístupu.
+
 const explainResult = db.getSiblingDB("gamesdb").games_unified_validated.find(
-  { release_year: 2020, source_platform: "steam" }
+  { release_year: 2018, source_platform: "steam" }
 ).explain("executionStats");
 
-print("Použitý plán:", explainResult.queryPlanner.winningPlan.stage);
+print("--- S indexem ---");
+print("Nalezeno dokumentů:", explainResult.executionStats.nReturned);
 print("Prohlédnuté dokumenty:", explainResult.executionStats.totalDocsExamined);
-print("Vrácené dokumenty:",     explainResult.executionStats.nReturned);
-print("Čas (ms):",              explainResult.executionStats.executionTimeMillis);
+print("Prohlédnuté klíče:", explainResult.executionStats.totalKeysExamined);
+print("Čas (ms):", explainResult.executionStats.executionTimeMillis);
 
-// Srovnání bez indexu (forced COLLSCAN):
 const collscanResult = db.getSiblingDB("gamesdb").games_unified_validated.find(
-  { release_year: 2020, source_platform: "steam" }
+  { release_year: 2018, source_platform: "steam" }
 ).hint({ $natural: 1 }).explain("executionStats");
 
 print("\n--- Bez indexu (COLLSCAN) ---");
+print("Nalezeno dokumentů:", collscanResult.executionStats.nReturned);
 print("Prohlédnuté dokumenty:", collscanResult.executionStats.totalDocsExamined);
-print("Čas (ms):",              collscanResult.executionStats.executionTimeMillis);
+print("Prohlédnuté klíče:", collscanResult.executionStats.totalKeysExamined);
+print("Čas (ms):", collscanResult.executionStats.executionTimeMillis);
 
 
-// --- Dotaz 28: Partial index – vytvoření a ověření efektivity ---
-// Zadání: Vytvoř partial index jen pro prémiové hry (price > 30 a critic_score > 80).
-// Ověř, že dotaz na prémiové hry tento index skutečně využívá.
+// --- Dotaz 28: Partial index – vytvoření a ověření efektivity na Steam datech ---
+// Zadání: Vytvoř partial index pro dražší a populární Steam hry
+// (price > 30 a positive_ratings > 1000) a ověř, že dotaz na tuto
+// podmnožinu dat index skutečně využívá.
 //
-// Obecně: Partial index indexuje jen podmnožinu dokumentů splňující
-// partialFilterExpression. Je menší než plný index, rychleji se
-// aktualizuje a šetří RAM. Vhodný pro frekventované dotazy na podmnožinu.
-// Konkrétně: Dotazy na prémiové Steam hry budou rychlejší, ostatní
-// dotazy na celou kolekci budou používat jiné indexy.
+// Obecně: Partial index indexuje jen dokumenty splňující
+// partialFilterExpression. Je menší než plný index, snižuje režii
+// při aktualizaci a je vhodný pro časté dotazy na vybranou podmnožinu.
+// explain("executionStats") umožňuje ověřit, zda databáze použila
+// indexovaný přístup místo plného průchodu kolekcí.
+//
+// Konkrétně: Dotaz ověřuje, že u Steam her s vyšší cenou a větším
+// počtem pozitivních hodnocení bude použit partial index
+// idx_popular_premium_steam.
+
 db.getSiblingDB("gamesdb").games_unified_validated.createIndex(
-  { price: -1, critic_score: -1, source_platform: 1 },
+  { source_platform: 1, price: -1, positive_ratings: -1 },
   {
-    name: "idx_premium_titles",
+    name: "idx_popular_premium_steam",
     partialFilterExpression: {
-      price:        { $gt: 30 },
-      critic_score: { $gt: 80 }
+      source_platform: "steam",
+      price: { $gt: 30 },
+      positive_ratings: { $gt: 1000 }
     }
   }
 );
 
-// Ověření využití partial indexu:
 const partialExplain = db.getSiblingDB("gamesdb").games_unified_validated.find(
-  { price: { $gt: 30 }, critic_score: { $gt: 80 }, source_platform: "steam" }
-).explain("executionStats");
+  {
+    source_platform: "steam",
+    price: { $gt: 30 },
+    positive_ratings: { $gt: 1000 }
+  }
+).hint("idx_popular_premium_steam").explain("executionStats");
 
-print("Plán dotazu:", JSON.stringify(partialExplain.queryPlanner.winningPlan, null, 2));
+print("--- S partial indexem ---");
 print("Prohlédnuto dokumentů:", partialExplain.executionStats.totalDocsExamined);
+print("Prohlédnuto klíčů:", partialExplain.executionStats.totalKeysExamined);
+print("Vráceno dokumentů:", partialExplain.executionStats.nReturned);
+print("Čas (ms):", partialExplain.executionStats.executionTimeMillis);
+printjson(partialExplain.queryPlanner.winningPlan);
 
-// Vrácení výsledku dotazu:
+print("\n--- Ukázkové dokumenty ---");
 db.getSiblingDB("gamesdb").games_unified_validated.find(
-  { price: { $gt: 30 }, critic_score: { $gt: 80 } },
-  { title: 1, price: 1, critic_score: 1, source_platform: 1 }
-).hint("idx_premium_titles").sort({ critic_score: -1 }).limit(10);
+  {
+    source_platform: "steam",
+    price: { $gt: 30 },
+    positive_ratings: { $gt: 1000 }
+  },
+  {
+    title: 1,
+    price: 1,
+    positive_ratings: 1,
+    source_platform: 1,
+    _id: 0
+  }
+).hint("idx_popular_premium_steam").sort({ positive_ratings: -1 }).limit(10);
 
 
 // --- Dotaz 29: $indexStats – analýza využití indexů v provozu ---
@@ -1500,15 +1960,32 @@ db.getSiblingDB("gamesdb").games_unified_validated.find(
 db.getSiblingDB("gamesdb").games_unified_validated.aggregate([
   { $indexStats: {} },
   {
-    $project: {
-      index_name:   "$name",
-      key:          "$key",
-      ops_count:    "$accesses.ops",
-      first_used:   "$accesses.since",
-      is_unused:    { $cond: [{ $eq: ["$accesses.ops", 0] }, true, false] }
+    $group: {
+      _id: "$name",
+      key: { $first: "$key" },
+      total_ops: { $sum: "$accesses.ops" },
+      shards_present: { $sum: 1 },
+      first_used: { $min: "$accesses.since" }
     }
   },
-  { $sort: { ops_count: -1 } }
+  {
+    $project: {
+      index_name: "$_id",
+      key: 1,
+      total_ops: 1,
+      shards_present: 1,
+      first_used: 1,
+      is_unused: {
+        $cond: [
+          { $eq: ["$total_ops", 0] },
+          true,
+          false
+        ]
+      },
+      _id: 0
+    }
+  },
+  { $sort: { total_ops: -1 } }
 ]);
 
 
